@@ -52,21 +52,44 @@ def call_llm(image_bytes: bytes) -> str:
     return text
 
 
+def get_last_processed_page(markdown_path: Path) -> int:
+    """Devuelve el número de la última página procesada en el Markdown, o 0 si no hay ninguna."""
+    content = markdown_path.read_text(encoding="utf-8")
+    matches = re.findall(r"^## Página (\d+)", content, flags=re.MULTILINE)
+    if matches:
+        return max(int(m) for m in matches)
+    return 0
+
+
 def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
     """Convierte cada página de un PDF en una imagen PNG en memoria y la envía al LLM."""
     slug = slugify(pdf_path.stem)
 
     markdown_path = output_base / f"{slug}.md"
 
-    print(f"Procesando: {pdf_path.name}  →  {markdown_path}")
-
     doc = fitz.open(str(pdf_path))
     total_pages = len(doc)
 
-    with markdown_path.open("w", encoding="utf-8") as md_file:
-        md_file.write(f"# {pdf_path.stem}\n\n")
+    # Determinar desde qué página continuar
+    if markdown_path.exists():
+        last_page = get_last_processed_page(markdown_path)
+        if last_page >= total_pages:
+            print(f"Saltando (ya completo): {pdf_path.name}  →  {markdown_path}\n")
+            doc.close()
+            return
+        start_page = last_page  # índice 0-based: la siguiente página a procesar
+        file_mode = "a"
+        print(f"Reanudando desde página {last_page + 1}: {pdf_path.name}  →  {markdown_path}")
+    else:
+        start_page = 0
+        file_mode = "w"
+        print(f"Procesando: {pdf_path.name}  →  {markdown_path}")
 
-        for page_number in range(total_pages):
+    with markdown_path.open(file_mode, encoding="utf-8") as md_file:
+        if file_mode == "w":
+            md_file.write(f"# {pdf_path.stem}\n\n")
+
+        for page_number in range(start_page, total_pages):
             page = doc[page_number]
             # Calcular el factor de escala para que el lado más largo no supere MAX_LONG_SIDE
             long_side = max(page.rect.width, page.rect.height)
@@ -89,7 +112,8 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             print("OK")
 
     doc.close()
-    print(f"  {total_pages} página(s) procesada(s). Markdown: {markdown_path}\n")
+    pages_processed = total_pages - start_page
+    print(f"  {pages_processed} página(s) procesada(s). Markdown: {markdown_path}\n")
 
 
 def main() -> None:
