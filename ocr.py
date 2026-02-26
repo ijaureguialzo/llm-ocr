@@ -6,7 +6,7 @@ from pathlib import Path
 import fitz  # pymupdf
 import requests
 
-TARGET_WIDTH = 2000
+MAX_LONG_SIDE = 1288
 DATOS_DIR = Path("./datos")
 LLM_URL = "http://localhost:1234/api/v1/chat"
 LLM_MODEL = "allenai/olmocr-2-7b"
@@ -63,8 +63,9 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
 
         for page_number in range(total_pages):
             page = doc[page_number]
-            # Calcular el factor de escala para obtener TARGET_WIDTH píxeles de ancho
-            scale = TARGET_WIDTH / page.rect.width
+            # Calcular el factor de escala para que el lado más largo no supere MAX_LONG_SIDE
+            long_side = max(page.rect.width, page.rect.height)
+            scale = MAX_LONG_SIDE / long_side
             mat = fitz.Matrix(scale, scale)
             pix = page.get_pixmap(matrix=mat, alpha=False)
 
