@@ -144,8 +144,6 @@ def call_llm(image_bytes: bytes) -> str:
                         continue
                     if result["generation_id"] is None:
                         result["generation_id"] = data.get("id")
-                        with _current_lock:
-                            _current_generation_id = result["generation_id"]
                     delta = (data.get("choices") or [{}])[0].get("delta", {})
                     content = delta.get("content")
                     if content:
@@ -156,7 +154,15 @@ def call_llm(image_bytes: bytes) -> str:
 
     thread = threading.Thread(target=_do_request, daemon=True)
     thread.start()
-    thread.join(timeout=STREAM_CHUNK_TIMEOUT)
+
+    deadline = STREAM_CHUNK_TIMEOUT
+    while deadline > 0 and thread.is_alive():
+        thread.join(timeout=0.1)
+        deadline -= 0.1
+        # Propagar el generation_id al estado global en cuanto esté disponible
+        if result["generation_id"] is not None:
+            with _current_lock:
+                _current_generation_id = result["generation_id"]
 
     if thread.is_alive():
         _cancel_current_request()
