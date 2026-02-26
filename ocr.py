@@ -6,7 +6,6 @@ from pathlib import Path
 import fitz  # pymupdf
 import requests
 
-
 TARGET_WIDTH = 2000
 DATOS_DIR = Path("./datos")
 LLM_URL = "http://localhost:1234/api/v1/chat"
@@ -26,9 +25,9 @@ def slugify(text: str) -> str:
     return text
 
 
-def call_llm(image_path: Path) -> str:
-    """Envía una imagen al LLM en base64 y devuelve el texto de la respuesta."""
-    image_data = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+def call_llm(image_bytes: bytes) -> str:
+    """Envía una imagen en bytes al LLM en base64 y devuelve el texto de la respuesta."""
+    image_data = base64.b64encode(image_bytes).decode("utf-8")
     payload = {
         "model": LLM_MODEL,
         "input": [
@@ -49,14 +48,12 @@ def call_llm(image_path: Path) -> str:
 
 
 def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
-    """Convierte cada página de un PDF en una imagen PNG de TARGET_WIDTH píxeles de ancho."""
+    """Convierte cada página de un PDF en una imagen PNG en memoria y la envía al LLM."""
     slug = slugify(pdf_path.stem)
-    output_dir = output_base / slug
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     markdown_path = output_base / f"{slug}.md"
 
-    print(f"Procesando: {pdf_path.name}  →  {output_dir}/")
+    print(f"Procesando: {pdf_path.name}  →  {markdown_path}")
 
     doc = fitz.open(str(pdf_path))
     total_pages = len(doc)
@@ -71,13 +68,13 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             mat = fitz.Matrix(scale, scale)
             pix = page.get_pixmap(matrix=mat, alpha=False)
 
-            filename = f"pagina_{page_number + 1:03d}.png"
-            output_path = output_dir / filename
-            pix.save(str(output_path))
-            print(f"  Guardado: {filename} — llamando al LLM...", end=" ", flush=True)
+            # Obtener los bytes PNG directamente en memoria (sin escribir a disco)
+            image_bytes = pix.tobytes("png")
+
+            print(f"  Página {page_number + 1}/{total_pages} — llamando al LLM...", end=" ", flush=True)
 
             try:
-                text = call_llm(output_path)
+                text = call_llm(image_bytes)
             except Exception as e:
                 text = f"[Error al procesar esta página: {e}]"
 
@@ -104,4 +101,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
