@@ -118,6 +118,9 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
         if file_mode == "w":
             md_file.write(f"# {pdf_path.stem}\n\n")
 
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 3
+
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
                 doc.close()
@@ -137,8 +140,15 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
 
             try:
                 text = call_llm(image_bytes)
+                consecutive_errors = 0  # reiniciar contador en éxito
             except Exception as e:
-                text = f"[Error al procesar esta página: {e}]"
+                consecutive_errors += 1
+                print(f"  [Página {page_number + 1} omitida — error {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}]")
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    print(f"  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo procesado de: {pdf_path.name}")
+                    doc.close()
+                    return
+                continue
 
             md_file.write(f"## Página {page_number + 1}\n\n{text}\n\n")
             md_file.flush()
