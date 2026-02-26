@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import select
@@ -42,7 +43,7 @@ def _cancel_current_request() -> None:
     if client is not None:
         try:
             client.close()
-        except Exception:
+        except httpx.HTTPError:
             pass
 
     if generation_id is not None:
@@ -52,7 +53,7 @@ def _cancel_current_request() -> None:
                 headers={"Authorization": "Bearer lm-studio"},
                 timeout=5,
             )
-        except Exception:
+        except httpx.HTTPError:
             pass
 
 
@@ -138,9 +139,8 @@ def call_llm(image_bytes: bytes) -> str:
                     if data_str == "[DONE]":
                         break
                     try:
-                        import json
                         data = json.loads(data_str)
-                    except Exception:
+                    except (json.JSONDecodeError, KeyError):
                         continue
                     if result["generation_id"] is None:
                         result["generation_id"] = data.get("id")
@@ -149,7 +149,7 @@ def call_llm(image_bytes: bytes) -> str:
                     if content:
                         chunks.append(content)
             result["text"] = "".join(chunks)
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             result["error"] = exc
 
     thread = threading.Thread(target=_do_request, daemon=True)
@@ -175,7 +175,7 @@ def call_llm(image_bytes: bytes) -> str:
         _current_generation_id = None
     try:
         http_client.close()
-    except Exception:
+    except OSError:
         pass
 
     # Si la petición fue cancelada externamente (Escape o timeout ya gestionado), ignorar el error
@@ -255,7 +255,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             except InterruptedError:
                 doc.close()
                 return
-            except Exception as e:
+            except (TimeoutError, httpx.HTTPError, OSError) as e:
                 consecutive_errors += 1
                 print(f"{e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
