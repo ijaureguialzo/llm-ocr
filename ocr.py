@@ -19,7 +19,7 @@ def slugify(text: str) -> str:
     text = text.encode("ascii", "ignore").decode("ascii")
     text = text.lower()
     # Reemplazar cualquier carácter que no sea alfanumérico o guion por guion bajo
-    text = re.sub(r"[^\w]+", "_", text)
+    text = re.sub(r"\W+", "_", text)
     # Eliminar guiones bajos al inicio y al final
     text = text.strip("_")
     return text
