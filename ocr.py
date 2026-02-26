@@ -9,6 +9,7 @@ import threading
 import time
 import tty
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 
 import fitz  # pymupdf
@@ -209,74 +210,50 @@ def get_last_processed_page(markdown_path: Path) -> int:
     return 0
 
 
-def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
-    """Convierte cada página de un PDF en una imagen PNG en memoria y la envía al LLM."""
-    slug = slugify(pdf_path.stem)
+def _process_pages(
+    title: str,
+    markdown_path: Path,
+    total_pages: int,
+    start_page: int,
+    file_mode: str,
+    get_image_bytes: Callable[[int], bytes],
+) -> None:
+    """Bucle común de procesado de páginas: llama al LLM y escribe el Markdown.
 
-    markdown_path = output_base / f"{slug}.md"
-
-    doc = fitz.open(str(pdf_path))
-    total_pages = len(doc)
-
-    # Determinar desde qué página continuar
-    if markdown_path.exists():
-        last_page = get_last_processed_page(markdown_path)
-        if last_page >= total_pages:
-            print(f"Saltando (ya completo): {pdf_path.name}  →  {markdown_path}\n")
-            doc.close()
-            return
-        start_page = last_page  # índice 0-based: la siguiente página a procesar
-        file_mode = "a"
-        print(f"Reanudando desde página {last_page + 1}: {pdf_path.name}  →  {markdown_path}")
-    else:
-        start_page = 0
-        file_mode = "w"
-        print(f"Procesando: {pdf_path.name}  →  {markdown_path}\n")
-
+    get_image_bytes(page_number) debe devolver los bytes PNG de la página indicada.
+    """
     with markdown_path.open(file_mode, encoding="utf-8") as md_file:
         if file_mode == "w":
-            md_file.write(f"# {pdf_path.stem}\n\n")
+            md_file.write(f"# {title}\n\n")
 
         consecutive_errors = 0
         page_times: list[float] = []
 
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
-                doc.close()
                 return
 
-            page = doc[page_number]
-            # Calcular el factor de escala para que el lado más largo no supere MAX_LONG_SIDE
-            long_side = max(page.rect.width, page.rect.height)
-            scale = MAX_LONG_SIDE / long_side
-            mat = fitz.Matrix(scale, scale)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-
-            # Obtener los bytes PNG directamente en memoria (sin escribir a disco)
-            image_bytes = pix.tobytes("png")
-
-            print(f"  Página {page_number + 1}/{total_pages} — llamando al LLM...", end=" ", flush=True)
+            image_bytes = get_image_bytes(page_number)
 
             t_start = time.monotonic()
             done_event = threading.Event()
 
-            def _display_timer() -> None:
+            def _display_timer(pn: int = page_number) -> None:
                 while not done_event.wait(timeout=1.0):
                     elapsed_time = time.monotonic() - t_start
-                    print(f"\r  Página {page_number + 1}/{total_pages} — llamando al LLM... {_fmt(elapsed_time)}",
-                          end="",
-                          flush=True)
+                    print(f"\r  Página {pn + 1}/{total_pages} — llamando al LLM... {_fmt(elapsed_time)}",
+                          end="", flush=True)
 
+            print(f"  Página {page_number + 1}/{total_pages} — llamando al LLM...", end="", flush=True)
             timer_thread = threading.Thread(target=_display_timer, daemon=True)
             timer_thread.start()
 
             try:
                 text = call_llm(image_bytes)
-                consecutive_errors = 0  # reiniciar contador en éxito
+                consecutive_errors = 0
             except InterruptedError:
                 done_event.set()
                 timer_thread.join()
-                doc.close()
                 return
             except (TimeoutError, httpx.HTTPError, OSError) as e:
                 elapsed = time.monotonic() - t_start
@@ -285,8 +262,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
                 consecutive_errors += 1
                 print(f"\r  Página {page_number + 1}/{total_pages} — ERROR ({_fmt(elapsed)}) — {e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    print(f"  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo procesado de: {pdf_path.name}")
-                    doc.close()
+                    print(f"  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo procesado de: {title}")
                     return
                 continue
             finally:
@@ -300,25 +276,109 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             avg = sum(page_times) / pages_done
             eta = avg * pages_left
 
-            print(
-                f"\r  Página {page_number + 1}/{total_pages} — OK ({_fmt(elapsed)}) — media {_fmt(avg)}/pág — estimado restante: {_fmt(eta)}")
+            print(f"\r  Página {page_number + 1}/{total_pages} — OK ({_fmt(elapsed)}) — "
+                  f"media {_fmt(avg)}/pág — estimado restante: {_fmt(eta)}")
 
             md_file.write(f"## Página {page_number + 1}\n\n{text}\n\n")
             md_file.flush()
 
-    doc.close()
     pages_processed = total_pages - start_page
-    print(f"\n{pages_processed} página(s) procesada(s). Markdown: {markdown_path}\n")
+    print(f"\n  {pages_processed} página(s) procesada(s). Markdown: {markdown_path}\n")
+
+
+def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
+    """Convierte cada página de un PDF en una imagen PNG en memoria y la envía al LLM."""
+    slug = slugify(pdf_path.stem)
+    markdown_path = output_base / f"{slug}.md"
+
+    doc = fitz.open(str(pdf_path))
+    total_pages = len(doc)
+
+    if markdown_path.exists():
+        last_page = get_last_processed_page(markdown_path)
+        if last_page >= total_pages:
+            print(f"Saltando (ya completo): {pdf_path.name}  →  {markdown_path}\n")
+            doc.close()
+            return
+        start_page = last_page
+        file_mode = "a"
+        print(f"Reanudando desde página {last_page + 1}: {pdf_path.name}  →  {markdown_path}")
+    else:
+        start_page = 0
+        file_mode = "w"
+        print(f"Procesando: {pdf_path.name}  →  {markdown_path}\n")
+
+    def get_image_bytes(page_number: int) -> bytes:
+        page = doc[page_number]
+        long_side = max(page.rect.width, page.rect.height)
+        scale = MAX_LONG_SIDE / long_side
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        return pix.tobytes("png")
+
+    _process_pages(pdf_path.stem, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
+    doc.close()
+
+
+def process_image_dir(dir_path: Path, output_base: Path) -> None:
+    """Procesa todas las imágenes PNG/JPEG de un subdirectorio como si fuera un proyecto."""
+    slug = slugify(dir_path.name)
+    markdown_path = output_base / f"{slug}.md"
+
+    image_files = sorted(
+        f for f in dir_path.iterdir()
+        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    )
+
+    if not image_files:
+        return
+
+    total_pages = len(image_files)
+
+    if markdown_path.exists():
+        last_page = get_last_processed_page(markdown_path)
+        if last_page >= total_pages:
+            print(f"Saltando (ya completo): {dir_path.name}/  →  {markdown_path}\n")
+            return
+        start_page = last_page
+        file_mode = "a"
+        print(f"Reanudando desde imagen {last_page + 1}: {dir_path.name}/  →  {markdown_path}")
+    else:
+        start_page = 0
+        file_mode = "w"
+        print(f"Procesando directorio: {dir_path.name}/  →  {markdown_path}\n")
+
+    def get_image_bytes(page_number: int) -> bytes:
+        img_path = image_files[page_number]
+        # Reescalar con fitz para respetar MAX_LONG_SIDE igual que con los PDFs
+        doc = fitz.open(str(img_path))
+        page = doc[0]
+        long_side = max(page.rect.width, page.rect.height)
+        scale = MAX_LONG_SIDE / long_side
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        doc.close()
+        return pix.tobytes("png")
+
+    _process_pages(dir_path.name, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
 
 
 def main() -> None:
     pdf_files = sorted(DATOS_DIR.glob("*.pdf"))
+    image_dirs = sorted(
+        d for d in DATOS_DIR.iterdir()
+        if d.is_dir() and any(
+            f.suffix.lower() in {".png", ".jpg", ".jpeg"} for f in d.iterdir() if f.is_file()
+        )
+    )
 
-    if not pdf_files:
-        print(f"No se encontraron archivos PDF en '{DATOS_DIR}'.")
+    if not pdf_files and not image_dirs:
+        print(f"No se encontraron archivos PDF ni directorios con imágenes en '{DATOS_DIR}'.")
         return
 
-    print(f"Se encontraron {len(pdf_files)} archivo(s) PDF.")
+    total = len(pdf_files) + len(image_dirs)
+    print(
+        f"Se encontraron {len(pdf_files)} PDF(s) y {len(image_dirs)} directorio(s) con imágenes ({total} proyecto(s) en total).")
     print("Pulsa Escape en cualquier momento para detener el procesamiento.\n")
 
     listener = threading.Thread(target=_keyboard_listener, daemon=True)
@@ -329,9 +389,14 @@ def main() -> None:
             break
         convert_pdf_to_images(pdf_path, DATOS_DIR)
 
+    for dir_path in image_dirs:
+        if stop_requested.is_set():
+            break
+        process_image_dir(dir_path, DATOS_DIR)
+
     # Restaurar el terminal si el listener sigue vivo (salida normal)
     if not stop_requested.is_set():
-        _listener_exit.set()  # señal para que el hilo termine sin marcar parada de usuario
+        _listener_exit.set()
     listener.join(timeout=1)
 
     if stop_requested.is_set():
