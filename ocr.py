@@ -143,7 +143,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
                 consecutive_errors = 0  # reiniciar contador en éxito
             except Exception as e:
                 consecutive_errors += 1
-                print(f"  [Página {page_number + 1} omitida — error {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}]")
+                print(f"{e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                     print(f"  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo procesado de: {pdf_path.name}")
                     doc.close()
