@@ -31,8 +31,9 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
     print(f"Procesando: {pdf_path.name}  →  {output_dir}/")
 
     doc = fitz.open(str(pdf_path))
+    total_pages = len(doc)
 
-    for page_number in range(len(doc)):
+    for page_number in range(total_pages):
         page = doc[page_number]
         # Calcular el factor de escala para obtener TARGET_WIDTH píxeles de ancho
         scale = TARGET_WIDTH / page.rect.width
@@ -45,7 +46,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
         print(f"  Guardado: {filename}")
 
     doc.close()
-    print(f"  {len(doc)} página(s) procesada(s).\n")
+    print(f"  {total_pages} página(s) procesada(s).\n")
 
 
 def main() -> None:
