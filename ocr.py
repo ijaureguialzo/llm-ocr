@@ -1,5 +1,4 @@
 import base64
-import json
 import re
 import select
 import sys
@@ -10,13 +9,13 @@ import unicodedata
 from pathlib import Path
 
 import fitz  # pymupdf
-import requests
+import httpx
 
 MAX_LONG_SIDE = 1288
 DATOS_DIR = Path("./datos")
-LLM_BASE_URL = "http://localhost:1234"
+LLM_BASE_URL = "http://localhost:1234/v1"
 LLM_MODEL = "allenai/olmocr-2-7b"
-STREAM_CHUNK_TIMEOUT = 60
+STREAM_CHUNK_TIMEOUT = 60  # segundos máximos para la petición completa
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
 stop_requested = threading.Event()
@@ -59,10 +58,10 @@ def slugify(text: str) -> str:
 def call_llm(image_bytes: bytes) -> str:
     """Envía una imagen en bytes al LLM en base64 usando streaming SSE y devuelve el texto.
 
-    Lanza TimeoutError si la petición completa (desde el envío hasta el último chunk)
-    tarda más de STREAM_CHUNK_TIMEOUT segundos.
+    Lanza TimeoutError si la petición completa tarda más de STREAM_CHUNK_TIMEOUT segundos.
     """
     image_data = base64.b64encode(image_bytes).decode("utf-8")
+
     payload = {
         "model": LLM_MODEL,
         "stream": True,
@@ -79,33 +78,38 @@ def call_llm(image_bytes: bytes) -> str:
         ],
     }
 
-    url = f"{LLM_BASE_URL}/v1/chat/completions"
-
-    result: dict = {"text": None, "error": None}
+    result: dict = {"text": None, "error": None, "generation_id": None}
+    # Cliente httpx compartido: cerrarlo desde el hilo principal interrumpe el socket
+    http_client = httpx.Client(timeout=None)
 
     def _do_request() -> None:
         try:
-            with requests.post(url, json=payload, stream=True, timeout=STREAM_CHUNK_TIMEOUT) as response:
+            chunks: list[str] = []
+            with http_client.stream(
+                "POST",
+                f"{LLM_BASE_URL}/chat/completions",
+                json=payload,
+                headers={"Authorization": "Bearer lm-studio"},
+            ) as response:
                 response.raise_for_status()
-                chunks: list[str] = []
-                for raw_line in response.iter_lines():
-                    if not raw_line:
-                        continue
-                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                for line in response.iter_lines():
                     if not line.startswith("data:"):
                         continue
                     data_str = line[len("data:"):].strip()
                     if data_str == "[DONE]":
                         break
                     try:
+                        import json
                         data = json.loads(data_str)
-                    except json.JSONDecodeError:
+                    except Exception:
                         continue
-                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    if result["generation_id"] is None:
+                        result["generation_id"] = data.get("id")
+                    delta = (data.get("choices") or [{}])[0].get("delta", {})
                     content = delta.get("content")
                     if content:
                         chunks.append(content)
-                result["text"] = "".join(chunks)
+            result["text"] = "".join(chunks)
         except Exception as exc:
             result["error"] = exc
 
@@ -114,10 +118,24 @@ def call_llm(image_bytes: bytes) -> str:
     thread.join(timeout=STREAM_CHUNK_TIMEOUT)
 
     if thread.is_alive():
-        # El hilo sigue bloqueado en la petición; lo dejamos morir solo (daemon=True)
+        # Cerrar el cliente httpx: interrumpe el socket y hace que iter_lines() lance una excepción
+        http_client.close()
+        # Pedir al servidor que detenga la generación
+        generation_id = result["generation_id"]
+        if generation_id:
+            try:
+                httpx.post(
+                    f"{LLM_BASE_URL}/chat/completions/{generation_id}/cancel",
+                    headers={"Authorization": "Bearer lm-studio"},
+                    timeout=5,
+                )
+            except Exception:
+                pass
         raise TimeoutError(
             f"La petición al LLM superó el límite de {STREAM_CHUNK_TIMEOUT}s sin completarse"
         )
+
+    http_client.close()
 
     if result["error"] is not None:
         raise result["error"]
