@@ -27,6 +27,34 @@ stop_requested = threading.Event()
 # Flag interno: señal para que el hilo listener termine sin que el usuario haya pulsado Escape
 _listener_exit = threading.Event()
 
+# Estado de la petición LLM en curso (accedido desde el listener de teclado y call_llm)
+_current_http_client: httpx.Client | None = None
+_current_generation_id: str | None = None
+_current_lock = threading.Lock()
+
+
+def _cancel_current_request() -> None:
+    """Interrumpe la petición LLM en curso cerrando el socket y notificando al servidor."""
+    with _current_lock:
+        client = _current_http_client
+        generation_id = _current_generation_id
+
+    if client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+    if generation_id is not None:
+        try:
+            httpx.post(
+                f"{LLM_BASE_URL}/chat/completions/{generation_id}/cancel",
+                headers={"Authorization": "Bearer lm-studio"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
 
 def _keyboard_listener() -> None:
     """Hilo que espera la tecla Escape sin poner el terminal en modo raw."""
@@ -42,6 +70,7 @@ def _keyboard_listener() -> None:
                 if ch == "\x1b":  # tecla Escape
                     print("\n[Escape] Deteniendo tras la página actual...")
                     stop_requested.set()
+                    _cancel_current_request()
                     return
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -87,6 +116,11 @@ def call_llm(image_bytes: bytes) -> str:
     # Cliente httpx compartido: cerrarlo desde el hilo principal interrumpe el socket
     http_client = httpx.Client(timeout=None)
 
+    global _current_http_client, _current_generation_id
+    with _current_lock:
+        _current_http_client = http_client
+        _current_generation_id = None
+
     def _do_request() -> None:
         try:
             chunks: list[str] = []
@@ -110,6 +144,8 @@ def call_llm(image_bytes: bytes) -> str:
                         continue
                     if result["generation_id"] is None:
                         result["generation_id"] = data.get("id")
+                        with _current_lock:
+                            _current_generation_id = result["generation_id"]
                     delta = (data.get("choices") or [{}])[0].get("delta", {})
                     content = delta.get("content")
                     if content:
@@ -123,24 +159,22 @@ def call_llm(image_bytes: bytes) -> str:
     thread.join(timeout=STREAM_CHUNK_TIMEOUT)
 
     if thread.is_alive():
-        # Cerrar el cliente httpx: interrumpe el socket y hace que iter_lines() lance una excepción
-        http_client.close()
-        # Pedir al servidor que detenga la generación
-        generation_id = result["generation_id"]
-        if generation_id:
-            try:
-                httpx.post(
-                    f"{LLM_BASE_URL}/chat/completions/{generation_id}/cancel",
-                    headers={"Authorization": "Bearer lm-studio"},
-                    timeout=5,
-                )
-            except Exception:
-                pass
+        _cancel_current_request()
         raise TimeoutError(
             f"La petición al LLM superó el límite de {STREAM_CHUNK_TIMEOUT}s sin completarse"
         )
 
-    http_client.close()
+    with _current_lock:
+        _current_http_client = None
+        _current_generation_id = None
+    try:
+        http_client.close()
+    except Exception:
+        pass
+
+    # Si la petición fue cancelada externamente (Escape o timeout ya gestionado), ignorar el error
+    if stop_requested.is_set():
+        raise InterruptedError("Petición cancelada por el usuario")
 
     if result["error"] is not None:
         raise result["error"]
@@ -212,6 +246,9 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             try:
                 text = call_llm(image_bytes)
                 consecutive_errors = 0  # reiniciar contador en éxito
+            except InterruptedError:
+                doc.close()
+                return
             except Exception as e:
                 consecutive_errors += 1
                 print(f"{e}")
