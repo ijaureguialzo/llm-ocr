@@ -1,5 +1,10 @@
 import base64
 import re
+import select
+import sys
+import termios
+import threading
+import tty
 import unicodedata
 from pathlib import Path
 
@@ -10,6 +15,30 @@ MAX_LONG_SIDE = 1288
 DATOS_DIR = Path("./datos")
 LLM_URL = "http://localhost:1234/api/v1/chat"
 LLM_MODEL = "allenai/olmocr-2-7b"
+
+# Flag compartido: se activa cuando el usuario pulsa Escape
+stop_requested = threading.Event()
+# Flag interno: señal para que el hilo listener termine sin que el usuario haya pulsado Escape
+_listener_exit = threading.Event()
+
+
+def _keyboard_listener() -> None:
+    """Hilo que espera la tecla Escape sin poner el terminal en modo raw."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)  # cbreak: entrega caracteres de uno en uno pero mantiene \r\n intactos
+        while not _listener_exit.is_set():
+            # Esperar hasta 200 ms para no bloquear indefinidamente
+            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+            if ready:
+                ch = sys.stdin.read(1)
+                if ch == "\x1b":  # tecla Escape
+                    print("\n[Escape] Deteniendo tras la página actual...")
+                    stop_requested.set()
+                    return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def slugify(text: str) -> str:
@@ -90,6 +119,10 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             md_file.write(f"# {pdf_path.stem}\n\n")
 
         for page_number in range(start_page, total_pages):
+            if stop_requested.is_set():
+                doc.close()
+                return
+
             page = doc[page_number]
             # Calcular el factor de escala para que el lado más largo no supere MAX_LONG_SIDE
             long_side = max(page.rect.width, page.rect.height)
@@ -123,10 +156,24 @@ def main() -> None:
         print(f"No se encontraron archivos PDF en '{DATOS_DIR}'.")
         return
 
-    print(f"Se encontraron {len(pdf_files)} archivo(s) PDF.\n")
+    print(f"Se encontraron {len(pdf_files)} archivo(s) PDF.")
+    print("Pulsa Escape en cualquier momento para detener el procesamiento.\n")
+
+    listener = threading.Thread(target=_keyboard_listener, daemon=True)
+    listener.start()
 
     for pdf_path in pdf_files:
+        if stop_requested.is_set():
+            break
         convert_pdf_to_images(pdf_path, DATOS_DIR)
+
+    # Restaurar el terminal si el listener sigue vivo (salida normal)
+    if not stop_requested.is_set():
+        _listener_exit.set()  # señal para que el hilo termine sin marcar parada de usuario
+    listener.join(timeout=1)
+
+    if stop_requested.is_set():
+        print("Procesamiento detenido por el usuario.")
 
 
 if __name__ == "__main__":
