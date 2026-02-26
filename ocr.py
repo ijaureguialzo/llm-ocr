@@ -6,6 +6,7 @@ import select
 import sys
 import termios
 import threading
+import time
 import tty
 import unicodedata
 from pathlib import Path
@@ -69,12 +70,18 @@ def _keyboard_listener() -> None:
             if ready:
                 ch = sys.stdin.read(1)
                 if ch == "\x1b":  # tecla Escape
-                    print("[Escape] Deteniendo el proceso...")
+                    print("\n    [Escape] Deteniendo el proceso...")
                     stop_requested.set()
                     _cancel_current_request()
                     return
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _fmt(seconds: float) -> str:
+    """Formatea una duración en segundos como m:ss."""
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
 
 
 def slugify(text: str) -> str:
@@ -224,13 +231,14 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
     else:
         start_page = 0
         file_mode = "w"
-        print(f"Procesando: {pdf_path.name}  →  {markdown_path}")
+        print(f"Procesando: {pdf_path.name}  →  {markdown_path}\n")
 
     with markdown_path.open(file_mode, encoding="utf-8") as md_file:
         if file_mode == "w":
             md_file.write(f"# {pdf_path.stem}\n\n")
 
         consecutive_errors = 0
+        page_times: list[float] = []
 
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
@@ -249,28 +257,58 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
 
             print(f"  Página {page_number + 1}/{total_pages} — llamando al LLM...", end=" ", flush=True)
 
+            t_start = time.monotonic()
+            done_event = threading.Event()
+
+            def _display_timer() -> None:
+                while not done_event.wait(timeout=1.0):
+                    elapsed_time = time.monotonic() - t_start
+                    print(f"\r  Página {page_number + 1}/{total_pages} — llamando al LLM... {_fmt(elapsed_time)}",
+                          end="",
+                          flush=True)
+
+            timer_thread = threading.Thread(target=_display_timer, daemon=True)
+            timer_thread.start()
+
             try:
                 text = call_llm(image_bytes)
                 consecutive_errors = 0  # reiniciar contador en éxito
             except InterruptedError:
+                done_event.set()
+                timer_thread.join()
                 doc.close()
                 return
             except (TimeoutError, httpx.HTTPError, OSError) as e:
+                elapsed = time.monotonic() - t_start
+                done_event.set()
+                timer_thread.join()
                 consecutive_errors += 1
-                print(f"{e}")
+                print(f"\r  Página {page_number + 1}/{total_pages} — ERROR ({_fmt(elapsed)}) — {e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                     print(f"  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo procesado de: {pdf_path.name}")
                     doc.close()
                     return
                 continue
+            finally:
+                done_event.set()
+
+            elapsed = time.monotonic() - t_start
+            page_times.append(elapsed)
+
+            pages_done = len(page_times)
+            pages_left = total_pages - (start_page + pages_done)
+            avg = sum(page_times) / pages_done
+            eta = avg * pages_left
+
+            print(
+                f"\r  Página {page_number + 1}/{total_pages} — OK ({_fmt(elapsed)}) — media {_fmt(avg)}/pág — estimado restante: {_fmt(eta)}")
 
             md_file.write(f"## Página {page_number + 1}\n\n{text}\n\n")
             md_file.flush()
-            print("OK")
 
     doc.close()
     pages_processed = total_pages - start_page
-    print(f"  {pages_processed} página(s) procesada(s). Markdown: {markdown_path}\n")
+    print(f"\n{pages_processed} página(s) procesada(s). Markdown: {markdown_path}\n")
 
 
 def main() -> None:
@@ -297,7 +335,7 @@ def main() -> None:
     listener.join(timeout=1)
 
     if stop_requested.is_set():
-        print("Procesamiento detenido por el usuario.")
+        print("\nProcesamiento detenido por el usuario.")
 
 
 if __name__ == "__main__":
