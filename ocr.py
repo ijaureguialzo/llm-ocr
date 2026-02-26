@@ -1,4 +1,5 @@
 import base64
+import os
 import re
 import select
 import sys
@@ -10,12 +11,16 @@ from pathlib import Path
 
 import fitz  # pymupdf
 import httpx
+from dotenv import load_dotenv
 
-MAX_LONG_SIDE = 1288
-DATOS_DIR = Path("./datos")
-LLM_BASE_URL = "http://localhost:1234/v1"
-LLM_MODEL = "allenai/olmocr-2-7b"
-STREAM_CHUNK_TIMEOUT = 60  # segundos máximos para la petición completa
+load_dotenv(Path(__file__).parent / ".env")
+
+MAX_LONG_SIDE = int(os.getenv("MAX_LONG_SIDE", "1288"))
+DATOS_DIR = Path(os.getenv("DATOS_DIR", "./datos"))
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
+STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "60"))
+MAX_CONSECUTIVE_ERRORS = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
 stop_requested = threading.Event()
@@ -186,7 +191,6 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             md_file.write(f"# {pdf_path.stem}\n\n")
 
         consecutive_errors = 0
-        MAX_CONSECUTIVE_ERRORS = 3
 
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
