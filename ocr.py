@@ -1,4 +1,5 @@
 import base64
+import json
 import re
 import select
 import sys
@@ -13,8 +14,9 @@ import requests
 
 MAX_LONG_SIDE = 1288
 DATOS_DIR = Path("./datos")
-LLM_URL = "http://localhost:1234/api/v1/chat"
+LLM_BASE_URL = "http://localhost:1234"
 LLM_MODEL = "allenai/olmocr-2-7b"
+STREAM_CHUNK_TIMEOUT = 60
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
 stop_requested = threading.Event()
@@ -55,25 +57,72 @@ def slugify(text: str) -> str:
 
 
 def call_llm(image_bytes: bytes) -> str:
-    """Envía una imagen en bytes al LLM en base64 y devuelve el texto de la respuesta."""
+    """Envía una imagen en bytes al LLM en base64 usando streaming SSE y devuelve el texto.
+
+    Lanza TimeoutError si la petición completa (desde el envío hasta el último chunk)
+    tarda más de STREAM_CHUNK_TIMEOUT segundos.
+    """
     image_data = base64.b64encode(image_bytes).decode("utf-8")
     payload = {
         "model": LLM_MODEL,
-        "input": [
+        "stream": True,
+        "messages": [
             {
-                "type": "image",
-                "data_url": f"data:image/png;base64,{image_data}",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_data}"},
+                    }
+                ],
             }
         ],
     }
-    response = requests.post(LLM_URL, json=payload)
-    response.raise_for_status()
-    data = response.json()
-    # Intentar extraer el texto de la respuesta
-    try:
-        text = data["output"][0]["content"]
-    except (KeyError, IndexError):
-        text = str(data)
+
+    url = f"{LLM_BASE_URL}/v1/chat/completions"
+
+    result: dict = {"text": None, "error": None}
+
+    def _do_request() -> None:
+        try:
+            with requests.post(url, json=payload, stream=True, timeout=STREAM_CHUNK_TIMEOUT) as response:
+                response.raise_for_status()
+                chunks: list[str] = []
+                for raw_line in response.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content")
+                    if content:
+                        chunks.append(content)
+                result["text"] = "".join(chunks)
+        except Exception as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=_do_request, daemon=True)
+    thread.start()
+    thread.join(timeout=STREAM_CHUNK_TIMEOUT)
+
+    if thread.is_alive():
+        # El hilo sigue bloqueado en la petición; lo dejamos morir solo (daemon=True)
+        raise TimeoutError(
+            f"La petición al LLM superó el límite de {STREAM_CHUNK_TIMEOUT}s sin completarse"
+        )
+
+    if result["error"] is not None:
+        raise result["error"]
+
+    text = result["text"] or ""
 
     # Eliminar el bloque de metadatos al inicio (delimitado por ---)
     text = re.sub(r"^---\n.*?---\n", "", text, flags=re.DOTALL)
