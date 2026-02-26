@@ -42,9 +42,14 @@ def call_llm(image_bytes: bytes) -> str:
     data = response.json()
     # Intentar extraer el texto de la respuesta
     try:
-        return data["output"][0]["content"]
+        text = data["output"][0]["content"]
     except (KeyError, IndexError):
-        return str(data)
+        text = str(data)
+
+    # Eliminar el bloque de metadatos al inicio (delimitado por ---)
+    text = re.sub(r"^---\n.*?---\n", "", text, flags=re.DOTALL)
+
+    return text
 
 
 def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
