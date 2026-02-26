@@ -42,7 +42,7 @@ def call_llm(image_bytes: bytes) -> str:
     data = response.json()
     # Intentar extraer el texto de la respuesta
     try:
-        return data["choices"][0]["message"]["content"]
+        return data["output"][0]["content"]
     except (KeyError, IndexError):
         return str(data)
 
