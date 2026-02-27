@@ -212,9 +212,13 @@ def call_llm(image_bytes: bytes) -> str:
 
     text = result["text"] or ""
 
-    # Eliminar el bloque de metadatos al inicio (delimitado por ---)
-    text = re.sub(r"^---\n.*?---\n", "", text, flags=re.DOTALL)
+    # Eliminar el bloque de metadatos al inicio (delimitado por ---).
+    # Acepta espacios/tabuladores tras los delimitadores y bloque al final del texto.
+    text = re.sub(r"^---[ \t]*\n.*?---[ \t]*(?:\n|$)", "", text, flags=re.DOTALL)
+    text = text.strip()
 
+    # Si tras eliminar el bloque no queda contenido útil, devolver cadena vacía
+    # para que el llamador pueda decidir si escribe o no la página.
     return text
 
 
@@ -296,7 +300,11 @@ def _process_pages(
             print(f"\r  Página {page_number + 1}/{total_pages} — OK ({_fmt(elapsed)}) — "
                   f"media {_fmt(avg)}/pág — estimado restante: {_fmt(eta)}")
 
-            md_file.write(f"## Página {page_number + 1}\n\n{text}\n\n")
+            if text:
+                md_file.write(f"## Página {page_number + 1}\n\n{text}\n\n")
+            else:
+                md_file.write(f"## Página {page_number + 1}\n\nSin contenido.\n\n")
+                print(f"  Página {page_number + 1}/{total_pages} — sin contenido.")
             md_file.flush()
 
     pages_processed = total_pages - start_page
