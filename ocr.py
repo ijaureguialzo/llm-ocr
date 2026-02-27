@@ -297,7 +297,7 @@ def _process_pages(
             md_file.flush()
 
     pages_processed = total_pages - start_page
-    print(f"\n  {pages_processed} página(s) procesada(s). Markdown: {markdown_path}\n")
+    print(f"\n  {pages_processed} página(s) procesada(s).\n")
 
 
 def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
