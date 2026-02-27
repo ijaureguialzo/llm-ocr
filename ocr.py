@@ -97,13 +97,16 @@ def _print_banner() -> None:
 
 
 def slugify(text: str) -> str:
-    """Convierte un texto en un slug válido para nombre de directorio."""
-    # Normalizar caracteres unicode a su forma ASCII más cercana
-    text = unicodedata.normalize("NFKD", text)
-    text = text.encode("ascii", "ignore").decode("ascii")
-    text = text.lower()
-    # Reemplazar cualquier carácter que no sea alfanumérico o guion por guion bajo
-    text = re.sub(r"\W+", "_", text)
+    """Convierte un texto en un slug válido para nombre de directorio.
+
+    Conserva caracteres no ASCII (kanji, hiragana, katakana, etc.) y solo
+    reemplaza los caracteres que son inválidos o problemáticos en nombres de archivo.
+    """
+    # Normalizar a forma NFC para consistencia sin eliminar caracteres no ASCII
+    text = unicodedata.normalize("NFC", text)
+    # Reemplazar caracteres inválidos en nombres de archivo y espacios por guion bajo
+    # Se conservan letras, dígitos, guiones, puntos y cualquier carácter unicode de palabra (incluye CJK)
+    text = re.sub(r'[<>:"/\\|?*\s]+', "_", text)
     # Eliminar guiones bajos al inicio y al final
     text = text.strip("_")
     return text
