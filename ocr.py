@@ -22,8 +22,9 @@ MAX_LONG_SIDE = int(os.getenv("MAX_LONG_SIDE", "1288"))
 DATOS_DIR = Path(os.getenv("DATOS_DIR", "./datos"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
-STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "60"))
+STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "300"))
 MAX_CONSECUTIVE_ERRORS = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 DEBUG = os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes"}
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
@@ -123,6 +124,7 @@ def call_llm(image_bytes: bytes) -> str:
     payload = {
         "model": LLM_MODEL,
         "stream": True,
+        "max_tokens": MAX_TOKENS,
         "messages": [
             {
                 "role": "user",
