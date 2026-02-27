@@ -149,32 +149,57 @@ def call_llm(image_bytes: bytes) -> str:
 
     def _do_request() -> None:
         try:
-            chunks: list[str] = []
-            with http_client.stream(
-                "POST",
-                f"{LLM_BASE_URL}/chat/completions",
-                json=payload,
-                headers={"Authorization": "Bearer lm-studio"},
-            ) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[len("data:"):].strip()
-                    if DEBUG:
-                        print(f"\n  [DEBUG] {data_str}", flush=True)
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-                    if result["generation_id"] is None:
-                        result["generation_id"] = data.get("id")
-                    delta = (data.get("choices") or [{}])[0].get("delta", {})
-                    content = delta.get("content")
-                    if content:
-                        chunks.append(content)
+            current_max_tokens = payload["max_tokens"]
+
+            while True:
+                payload["max_tokens"] = current_max_tokens
+                finish_reason: str | None = None
+                chunks = []
+
+                with http_client.stream(
+                    "POST",
+                    f"{LLM_BASE_URL}/chat/completions",
+                    json=payload,
+                    headers={"Authorization": "Bearer lm-studio"},
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[len("data:"):].strip()
+                        if DEBUG:
+                            print(f"\n  [DEBUG] {data_str}", flush=True)
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                        if result["generation_id"] is None:
+                            result["generation_id"] = data.get("id")
+                        choice = (data.get("choices") or [{}])[0]
+                        delta = choice.get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            chunks.append(content)
+                        if choice.get("finish_reason"):
+                            finish_reason = choice["finish_reason"]
+
+                if finish_reason != "length":
+                    # Respuesta completa o error del modelo: salir del bucle
+                    break
+
+                # El modelo cortó por límite de tokens: duplicar y reintentar
+                current_max_tokens *= 2
+                print(
+                    f"\n  [tokens] Límite alcanzado ({current_max_tokens // 2} tokens). "
+                    f"Reintentando con {current_max_tokens}...",
+                    flush=True,
+                )
+                # Reiniciar el generation_id para que el hilo principal lo actualice
+                # con el id de la nueva petición
+                result["generation_id"] = None
+
             result["text"] = "".join(chunks)
         except (httpx.HTTPError, OSError) as exc:
             result["error"] = exc
