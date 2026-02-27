@@ -276,7 +276,7 @@ def _process_pages(
                 consecutive_errors += 1
                 print(f"\r  Página {page_number + 1}/{total_pages} — ERROR ({_fmt(elapsed)}) — {e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    print(f"  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo procesado de: {title}")
+                    print(f"\n  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo el proceso...\n")
                     return
                 continue
             finally:
@@ -320,7 +320,8 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
     else:
         start_page = 0
         file_mode = "w"
-        print(f"Procesando: {pdf_path.name}  →  {markdown_path}\n")
+        print(f"Procesando: {output_base}/{pdf_path.name}")
+        print(f"Markdown:   {markdown_path}\n")
 
     def get_image_bytes(page_number: int) -> bytes:
         page = doc[page_number]
@@ -360,7 +361,8 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
     else:
         start_page = 0
         file_mode = "w"
-        print(f"Procesando directorio: {dir_path.name}/  →  {markdown_path}\n")
+        print(f"Procesando: {output_base}/{dir_path.name}/")
+        print(f"Markdown:   {markdown_path}\n")
 
     def get_image_bytes(page_number: int) -> bytes:
         img_path = image_files[page_number]
