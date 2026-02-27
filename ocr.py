@@ -452,7 +452,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
 
     if markdown_path.exists():
         last_page = get_last_processed_page(markdown_path)
-        if last_page >= total_pages:
+        if last_page >= total_pages and not get_missing_pages(markdown_path):
             print(f"Saltando (ya completo): {pdf_path.name}  →  {markdown_path}\n")
             doc.close()
             return
@@ -494,7 +494,7 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
 
     if markdown_path.exists():
         last_page = get_last_processed_page(markdown_path)
-        if last_page >= total_pages:
+        if last_page >= total_pages and not get_missing_pages(markdown_path):
             print(f"Saltando (ya completo): {dir_path.name}/  →  {markdown_path}\n")
             return
         start_page = last_page
