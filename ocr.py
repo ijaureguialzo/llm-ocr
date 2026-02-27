@@ -71,7 +71,7 @@ def _keyboard_listener() -> None:
             if ready:
                 ch = sys.stdin.read(1)
                 if ch == "\x1b":  # tecla Escape
-                    print("\n    [Escape] Deteniendo el proceso...")
+                    print("\n\n  [Escape] Deteniendo el proceso...")
                     stop_requested.set()
                     _cancel_current_request()
                     return
