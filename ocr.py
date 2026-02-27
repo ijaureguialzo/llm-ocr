@@ -24,6 +24,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
 STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "60"))
 MAX_CONSECUTIVE_ERRORS = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
+DEBUG = os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes"}
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
 stop_requested = threading.Event()
@@ -158,6 +159,8 @@ def call_llm(image_bytes: bytes) -> str:
                     if not line.startswith("data:"):
                         continue
                     data_str = line[len("data:"):].strip()
+                    if DEBUG:
+                        print(f"\n  [DEBUG] {data_str}", flush=True)
                     if data_str == "[DONE]":
                         break
                     try:
