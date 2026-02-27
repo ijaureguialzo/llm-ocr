@@ -8,9 +8,9 @@ help: _header
 	@echo -----------------------
 
 _header:
-	@echo -----------------------------------
-	@echo OCR de PDF a Markdown con LLM local
-	@echo -----------------------------------
+	@echo -------
+	@echo LLM OCR
+	@echo -------
 
 ocr:
 	@poetry run python ocr.py
