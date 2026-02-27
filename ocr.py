@@ -258,6 +258,46 @@ def get_last_processed_page(markdown_path: Path) -> int:
     return 0
 
 
+def get_missing_pages(markdown_path: Path) -> list[int]:
+    """Devuelve lista (1-based) de páginas que faltan en el rango [1, max_found].
+
+    Solo busca huecos dentro del rango ya procesado, no las páginas pendientes al final.
+    """
+    content = markdown_path.read_text(encoding="utf-8")
+    found = {int(m) for m in re.findall(r"^## Página (\d+)", content, flags=re.MULTILINE)}
+    if not found:
+        return []
+    max_found = max(found)
+    return [p for p in range(1, max_found + 1) if p not in found]
+
+
+def _insert_page_into_markdown(markdown_path: Path, page_number: int, text: str) -> None:
+    """Inserta el bloque '## Página N' en la posición correcta dentro del Markdown.
+
+    Busca el primer encabezado '## Página M' con M > page_number y coloca el nuevo
+    bloque justo antes. Si no hay ninguno posterior, lo añade al final del fichero.
+    """
+    content = markdown_path.read_text(encoding="utf-8")
+
+    # Localizar la posición del primer '## Página M' con M > page_number
+    pattern = re.compile(r"^(## Página (\d+))", re.MULTILINE)
+    insert_pos: int | None = None
+    for m in pattern.finditer(content):
+        if int(m.group(2)) > page_number:
+            insert_pos = m.start()
+            break
+
+    block = f"## Página {page_number}\n\n{text}\n\n" if text else f"## Página {page_number}\n\nSin contenido.\n\n"
+
+    if insert_pos is None:
+        # Añadir al final asegurándonos de que hay exactamente una línea en blanco de separación
+        new_content = content.rstrip("\n") + "\n\n" + block
+    else:
+        new_content = content[:insert_pos] + block + content[insert_pos:]
+
+    markdown_path.write_text(new_content, encoding="utf-8")
+
+
 def _process_pages(
     title: str,
     markdown_path: Path,
@@ -269,14 +309,73 @@ def _process_pages(
     """Bucle común de procesado de páginas: llama al LLM y escribe el Markdown.
 
     get_image_bytes(page_number) debe devolver los bytes PNG de la página indicada.
+
+    Si el fichero ya existía (file_mode == "a"), primero intenta recuperar las páginas
+    hueco (omitidas por errores en ejecuciones previas) e insertarlas en su posición.
     """
-    with markdown_path.open(file_mode, encoding="utf-8") as md_file:
+    page_times: list[float] = []
+    error_pages: list[int] = []
+
+    # ── Fase 1: recuperar páginas hueco ──────────────────────────────────────
+    if file_mode == "a":
+        missing = get_missing_pages(markdown_path)
+        if missing:
+            print(f"\n  Páginas hueco detectadas: {missing}")
+            print("  Intentando recuperarlas antes de continuar...\n")
+            recovered = 0
+            for page_num in list(missing):
+                if stop_requested.is_set():
+                    break
+                page_number = page_num - 1  # convertir a 0-based
+
+                t_start = time.monotonic()
+                done_event = threading.Event()
+
+                def _display_timer_gap(pn: int = page_num) -> None:
+                    while not done_event.wait(timeout=1.0):
+                        elapsed_time = time.monotonic() - t_start
+                        print(
+                            f"\r  [hueco] Página {pn}/{total_pages} — llamando al LLM... {_fmt(elapsed_time)}",
+                            end="", flush=True,
+                        )
+
+                image_bytes = get_image_bytes(page_number)
+                text = ""
+                print(f"  [hueco] Página {page_num}/{total_pages} — llamando al LLM...", end="", flush=True)
+                timer_thread = threading.Thread(target=_display_timer_gap, daemon=True)
+                timer_thread.start()
+
+                try:
+                    text = call_llm(image_bytes)
+                except InterruptedError:
+                    done_event.set()
+                    timer_thread.join()
+                    break
+                except (TimeoutError, httpx.HTTPError, OSError) as e:
+                    elapsed = time.monotonic() - t_start
+                    done_event.set()
+                    timer_thread.join()
+                    print(f"\r  [hueco] Página {page_num}/{total_pages} — ERROR ({_fmt(elapsed)}) — {e}")
+                    error_pages.append(page_num)
+                    continue
+                finally:
+                    done_event.set()
+
+                elapsed = time.monotonic() - t_start
+                page_times.append(elapsed)
+                recovered += 1
+                print(f"\r  [hueco] Página {page_num}/{total_pages} — OK ({_fmt(elapsed)})")
+                _insert_page_into_markdown(markdown_path, page_num, text)
+
+            if recovered:
+                print(f"\n  {recovered} página(s) hueco recuperada(s).\n")
+
+    # ── Fase 2: bucle principal (páginas nuevas desde start_page) ────────────
+    with markdown_path.open(file_mode if file_mode == "w" else "a", encoding="utf-8") as md_file:
         if file_mode == "w":
             md_file.write(f"# {title}\n\n")
 
         consecutive_errors = 0
-        error_pages: list[int] = []
-        page_times: list[float] = []
 
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
