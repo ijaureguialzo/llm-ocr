@@ -1,4 +1,4 @@
-# llm-ocr
+# LLM OCR
 
 OCR de PDF a Markdown con LLM local.
 
