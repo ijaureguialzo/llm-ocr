@@ -85,6 +85,17 @@ def _fmt(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _print_banner() -> None:
+    print(r"""
+  ██╗     ██╗     ███╗   ███╗       ██████╗  ██████╗██████╗
+  ██║     ██║     ████╗ ████║      ██╔═══██╗██╔════╝██╔══██╗
+  ██║     ██║     ██╔████╔██║      ██║   ██║██║     ██████╔╝
+  ██║     ██║     ██║╚██╔╝██║      ██║   ██║██║     ██╔══██╗
+  ███████╗███████╗██║ ╚═╝ ██║      ╚██████╔╝╚██████╗██║  ██║
+  ╚══════╝╚══════╝╚═╝     ╚═╝       ╚═════╝  ╚═════╝╚═╝  ╚═╝
+""")
+
+
 def slugify(text: str) -> str:
     """Convierte un texto en un slug válido para nombre de directorio."""
     # Normalizar caracteres unicode a su forma ASCII más cercana
@@ -364,6 +375,7 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
 
 
 def main() -> None:
+    _print_banner()
     pdf_files = sorted(DATOS_DIR.glob("*.pdf"))
     image_dirs = sorted(
         d for d in DATOS_DIR.iterdir()
