@@ -275,11 +275,12 @@ def _process_pages(
             md_file.write(f"# {title}\n\n")
 
         consecutive_errors = 0
+        error_pages: list[int] = []
         page_times: list[float] = []
 
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
-                return
+                break
 
             image_bytes = get_image_bytes(page_number)
 
@@ -302,16 +303,17 @@ def _process_pages(
             except InterruptedError:
                 done_event.set()
                 timer_thread.join()
-                return
+                break
             except (TimeoutError, httpx.HTTPError, OSError) as e:
                 elapsed = time.monotonic() - t_start
                 done_event.set()
                 timer_thread.join()
                 consecutive_errors += 1
+                error_pages.append(page_number + 1)
                 print(f"\r  Página {page_number + 1}/{total_pages} — ERROR ({_fmt(elapsed)}) — {e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    print(f"\n  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo el proceso...\n")
-                    return
+                    print(f"\n  {MAX_CONSECUTIVE_ERRORS} errores consecutivos. Deteniendo el proceso...")
+                    break
                 continue
             finally:
                 done_event.set()
@@ -334,8 +336,11 @@ def _process_pages(
                 print(f"  Página {page_number + 1}/{total_pages} — sin contenido.")
             md_file.flush()
 
-    pages_processed = total_pages - start_page
-    print(f"\n  {pages_processed} página(s) procesada(s).\n")
+    pages_processed = len(page_times)
+    print(f"\n  {pages_processed} página(s) procesada(s) correctamente.")
+    if error_pages:
+        print(f"  {len(error_pages)} página(s) no procesada(s) por error: {error_pages}")
+    print()
 
 
 def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
