@@ -1,4 +1,5 @@
 import base64
+import datetime
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import time
 import tty
 import unicodedata
 from collections.abc import Callable
+from io import TextIOWrapper
 from pathlib import Path
 
 import fitz  # pymupdf
@@ -20,12 +22,66 @@ load_dotenv(Path(__file__).parent / ".env")
 
 MAX_LONG_SIDE = int(os.getenv("MAX_LONG_SIDE", "1288"))
 DATOS_DIR = Path(os.getenv("DATOS_DIR", "./datos"))
+LOGS_DIR = Path(os.getenv("LOGS_DIR", "./logs"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
 STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "300"))
 MAX_CONSECUTIVE_ERRORS = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 DEBUG = os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes"}
+
+
+class _TeeWriter:
+    """Duplica la escritura a la consola original y a un fichero de log.
+
+    En el fichero de log se limpia el retorno de carro (\\r) para conservar
+    solo la versión final de cada línea de progreso.
+    """
+
+    def __init__(self, console: TextIOWrapper, log_file: TextIOWrapper) -> None:
+        self._console = console
+        self._log_file = log_file
+        self._log_line_buf = ""
+
+    # ── API mínima compatible con sys.stdout ──────────────────────────────
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return self._console.encoding
+
+    def fileno(self) -> int:
+        return self._console.fileno()
+
+    def isatty(self) -> bool:
+        return self._console.isatty()
+
+    def write(self, s: str) -> int:
+        # Consola: escribir tal cual (los \r sobreescriben la línea visualmente)
+        self._console.write(s)
+        # Fichero de log: acumular en buffer y volcar líneas completas
+        self._log_line_buf += s
+        while "\n" in self._log_line_buf:
+            line, self._log_line_buf = self._log_line_buf.split("\n", 1)
+            # Si la línea tiene \r, quedarse solo con la parte tras el último \r
+            if "\r" in line:
+                line = line.rsplit("\r", 1)[-1]
+            self._log_file.write(line + "\n")
+        return len(s)
+
+    def flush(self) -> None:
+        self._console.flush()
+        self._log_file.flush()
+
+    def close_log(self) -> None:
+        """Vuelca el buffer pendiente y cierra el fichero de log."""
+        if self._log_line_buf:
+            remaining = self._log_line_buf
+            if "\r" in remaining:
+                remaining = remaining.rsplit("\r", 1)[-1]
+            if remaining:
+                self._log_file.write(remaining + "\n")
+            self._log_line_buf = ""
+        self._log_file.close()
+
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
 stop_requested = threading.Event()
@@ -544,6 +600,28 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
 
 
 def main() -> None:
+    # ── Configurar log tee: toda la salida va a consola y al fichero de log ──
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_name = f"llm-ocr-{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
+    log_path = LOGS_DIR / log_name
+    log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115
+    _original_stdout = sys.stdout
+    _original_stderr = sys.stderr
+    tee_out = _TeeWriter(sys.stdout, log_file)
+    sys.stdout = tee_out  # type: ignore[assignment]
+    sys.stderr = tee_out  # type: ignore[assignment]
+
+    try:
+        _main_inner()
+    finally:
+        sys.stdout = _original_stdout
+        sys.stderr = _original_stderr
+        tee_out.close_log()
+        print(f"Log guardado en: {log_path}")
+
+
+def _main_inner() -> None:
+    """Lógica principal del programa (ejecutada bajo el tee de log)."""
     _print_banner()
     pdf_files = sorted(DATOS_DIR.glob("*.pdf"))
     image_dirs = sorted(

@@ -52,7 +52,8 @@ nohup.out
 __MACOSX/
 .AppleDouble
 .LSOverride
-Icon[]
+Icon[
+]
 
 # Thumbnails
 ._*
@@ -76,3 +77,4 @@ Temporary Items
 .env
 
 datos/
+logs/
