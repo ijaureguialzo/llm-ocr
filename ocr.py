@@ -32,6 +32,11 @@ stop_requested = threading.Event()
 # Flag interno: señal para que el hilo listener termine sin que el usuario haya pulsado Escape
 _listener_exit = threading.Event()
 
+# Contadores globales de tokens (thread-safe gracias al GIL para operaciones simples)
+_total_prompt_tokens: int = 0
+_total_completion_tokens: int = 0
+_tokens_lock = threading.Lock()
+
 # Estado de la petición LLM en curso (accedido desde el listener de teclado y call_llm)
 _current_http_client: httpx.Client | None = None
 _current_generation_id: str | None = None
@@ -114,9 +119,10 @@ def slugify(text: str) -> str:
     return text
 
 
-def call_llm(image_bytes: bytes) -> str:
+def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
     """Envía una imagen en bytes al LLM en base64 usando streaming SSE y devuelve el texto.
 
+    Devuelve (texto, prompt_tokens, completion_tokens).
     Lanza TimeoutError si la petición completa tarda más de STREAM_CHUNK_TIMEOUT segundos.
     """
     image_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -124,6 +130,7 @@ def call_llm(image_bytes: bytes) -> str:
     payload = {
         "model": LLM_MODEL,
         "stream": True,
+        "stream_options": {"include_usage": True},
         "max_tokens": MAX_TOKENS,
         "messages": [
             {
@@ -138,7 +145,8 @@ def call_llm(image_bytes: bytes) -> str:
         ],
     }
 
-    result: dict = {"text": None, "error": None, "generation_id": None}
+    result: dict = {"text": None, "error": None, "generation_id": None,
+                    "prompt_tokens": 0, "completion_tokens": 0}
     # Cliente httpx compartido: cerrarlo desde el hilo principal interrumpe el socket
     http_client = httpx.Client(timeout=None)
 
@@ -177,6 +185,11 @@ def call_llm(image_bytes: bytes) -> str:
                             continue
                         if result["generation_id"] is None:
                             result["generation_id"] = data.get("id")
+                        # Capturar estadísticas de uso de tokens
+                        usage = data.get("usage")
+                        if usage:
+                            result["prompt_tokens"] = usage.get("prompt_tokens", 0) or 0
+                            result["completion_tokens"] = usage.get("completion_tokens", 0) or 0
                         choice = (data.get("choices") or [{}])[0]
                         delta = choice.get("delta", {})
                         content = delta.get("content")
@@ -246,7 +259,7 @@ def call_llm(image_bytes: bytes) -> str:
 
     # Si tras eliminar el bloque no queda contenido útil, devolver cadena vacía
     # para que el llamador pueda decidir si escribe o no la página.
-    return text
+    return text, result["prompt_tokens"], result["completion_tokens"]
 
 
 def get_last_processed_page(markdown_path: Path) -> int:
@@ -315,6 +328,7 @@ def _process_pages(
     """
     page_times: list[float] = []
     error_pages: list[int] = []
+    global _total_prompt_tokens, _total_completion_tokens
 
     # ── Fase 1: recuperar páginas hueco ──────────────────────────────────────
     if file_mode == "a":
@@ -346,7 +360,10 @@ def _process_pages(
                 timer_thread.start()
 
                 try:
-                    text = call_llm(image_bytes)
+                    text, pt, ct = call_llm(image_bytes)
+                    with _tokens_lock:
+                        _total_prompt_tokens += pt
+                        _total_completion_tokens += ct
                 except InterruptedError:
                     done_event.set()
                     timer_thread.join()
@@ -397,7 +414,10 @@ def _process_pages(
             timer_thread.start()
 
             try:
-                text = call_llm(image_bytes)
+                text, pt, ct = call_llm(image_bytes)
+                with _tokens_lock:
+                    _total_prompt_tokens += pt
+                    _total_completion_tokens += ct
                 consecutive_errors = 0
             except InterruptedError:
                 done_event.set()
@@ -562,6 +582,16 @@ def main() -> None:
 
     if stop_requested.is_set():
         print("\nProcesamiento detenido por el usuario.")
+
+    # Resumen de uso de tokens
+    with _tokens_lock:
+        pt = _total_prompt_tokens
+        ct = _total_completion_tokens
+    if pt or ct:
+        print(f"  Tokens de entrada (prompt):  {pt:,}")
+        print(f"  Tokens de salida (completion): {ct:,}")
+        print(f"  Tokens totales:                {pt + ct:,}")
+        print()
 
 
 if __name__ == "__main__":
