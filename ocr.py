@@ -85,6 +85,8 @@ class _TeeWriter:
 
 # Flag compartido: se activa cuando el usuario pulsa Escape
 stop_requested = threading.Event()
+# Flag compartido: se activa cuando el usuario pulsa S/s (saltar página actual)
+skip_page_requested = threading.Event()
 # Flag interno: señal para que el hilo listener termine sin que el usuario haya pulsado Escape
 _listener_exit = threading.Event()
 
@@ -97,6 +99,10 @@ _tokens_lock = threading.Lock()
 _current_http_client: httpx.Client | None = None
 _current_generation_id: str | None = None
 _current_lock = threading.Lock()
+
+
+class SkipPageError(Exception):
+    """Se lanza cuando el usuario pulsa S/s para saltar la página actual."""
 
 
 def _cancel_current_request() -> None:
@@ -138,6 +144,10 @@ def _keyboard_listener() -> None:
                     stop_requested.set()
                     _cancel_current_request()
                     return
+                if ch in ("s", "S"):  # tecla S: saltar la página actual
+                    print("\n\n  [S] Saltando la página actual...")
+                    skip_page_requested.set()
+                    _cancel_current_request()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
@@ -300,6 +310,8 @@ def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
         pass
 
     # Si la petición fue cancelada externamente (Escape o timeout ya gestionado), ignorar el error
+    if skip_page_requested.is_set():
+        raise SkipPageError("Página saltada por el usuario")
     if stop_requested.is_set():
         raise InterruptedError("Petición cancelada por el usuario")
 
@@ -420,6 +432,14 @@ def _process_pages(
                     with _tokens_lock:
                         _total_prompt_tokens += pt
                         _total_completion_tokens += ct
+                except SkipPageError:
+                    elapsed = time.monotonic() - t_start
+                    done_event.set()
+                    timer_thread.join()
+                    skip_page_requested.clear()
+                    print(f"\r  [hueco] Página {page_num}/{total_pages} — OMITIDA ({_fmt(elapsed)})")
+                    _insert_page_into_markdown(markdown_path, page_num, "Página omitida.")
+                    continue
                 except InterruptedError:
                     done_event.set()
                     timer_thread.join()
@@ -475,6 +495,15 @@ def _process_pages(
                     _total_prompt_tokens += pt
                     _total_completion_tokens += ct
                 consecutive_errors = 0
+            except SkipPageError:
+                elapsed = time.monotonic() - t_start
+                done_event.set()
+                timer_thread.join()
+                skip_page_requested.clear()
+                print(f"\r  Página {page_number + 1}/{total_pages} — OMITIDA ({_fmt(elapsed)})")
+                md_file.write(f"## Página {page_number + 1}\n\nPágina omitida.\n\n")
+                md_file.flush()
+                continue
             except InterruptedError:
                 done_event.set()
                 timer_thread.join()
@@ -638,7 +667,7 @@ def _main_inner() -> None:
     total = len(pdf_files) + len(image_dirs)
     print(
         f"Se encontraron {len(pdf_files)} PDF(s) y {len(image_dirs)} directorio(s) con imágenes ({total} proyecto(s) en total).")
-    print("Pulsa Escape en cualquier momento para detener el procesamiento.\n")
+    print("Pulsa Escape en cualquier momento para detener el procesamiento o S para omitir una página.\n")
 
     listener = threading.Thread(target=_keyboard_listener, daemon=True)
     listener.start()
