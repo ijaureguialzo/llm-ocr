@@ -11,7 +11,6 @@ import time
 import tty
 import unicodedata
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
 from io import TextIOWrapper
 from pathlib import Path
 
@@ -176,11 +175,10 @@ def slugify(text: str) -> str:
     return text
 
 
-def call_llm(image_bytes: bytes, *, shared_client: httpx.Client | None = None) -> tuple[str, int, int]:
+def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
     """Envía una imagen en bytes al LLM en base64 usando streaming SSE y devuelve el texto.
 
     Devuelve (texto, prompt_tokens, completion_tokens).
-    Si se pasa *shared_client*, se reutiliza esa conexión (no se cierra al terminar).
     Lanza TimeoutError si la petición completa tarda más de STREAM_CHUNK_TIMEOUT segundos.
     """
     image_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -205,9 +203,8 @@ def call_llm(image_bytes: bytes, *, shared_client: httpx.Client | None = None) -
 
     result: dict = {"text": None, "error": None, "generation_id": None,
                     "prompt_tokens": 0, "completion_tokens": 0}
-    owns_client = shared_client is None
     # Cliente httpx compartido: cerrarlo desde el hilo principal interrumpe el socket
-    http_client = shared_client or httpx.Client(timeout=None)
+    http_client = httpx.Client(timeout=None)
 
     global _current_http_client, _current_generation_id
     with _current_lock:
@@ -297,11 +294,10 @@ def call_llm(image_bytes: bytes, *, shared_client: httpx.Client | None = None) -
     with _current_lock:
         _current_http_client = None
         _current_generation_id = None
-    if owns_client:
-        try:
-            http_client.close()
-        except OSError:
-            pass
+    try:
+        http_client.close()
+    except OSError:
+        pass
 
     # Si la petición fue cancelada externamente (Escape o timeout ya gestionado), ignorar el error
     if stop_requested.is_set():
@@ -390,36 +386,6 @@ def _process_pages(
     error_pages: list[int] = []
     global _total_prompt_tokens, _total_completion_tokens
 
-    # Cliente HTTP compartido para toda la sesión de procesado (connection pooling)
-    shared_http = httpx.Client(timeout=None)
-
-    try:
-        _process_pages_inner(
-            title, markdown_path, total_pages, start_page, file_mode,
-            get_image_bytes, shared_http, page_times, error_pages,
-        )
-    finally:
-        try:
-            shared_http.close()
-        except OSError:
-            pass
-
-
-def _process_pages_inner(
-    title: str,
-    markdown_path: Path,
-    total_pages: int,
-    start_page: int,
-    file_mode: str,
-    get_image_bytes: Callable[[int], bytes],
-    shared_http: httpx.Client,
-    page_times: list[float],
-    error_pages: list[int],
-) -> None:
-    """Lógica interna de procesado, con cliente HTTP y prefetch de imágenes."""
-    global _total_prompt_tokens, _total_completion_tokens
-    prefetch_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch")
-
     # ── Fase 1: recuperar páginas hueco ──────────────────────────────────────
     if file_mode == "a":
         missing = get_missing_pages(markdown_path)
@@ -450,7 +416,7 @@ def _process_pages_inner(
                 timer_thread.start()
 
                 try:
-                    text, pt, ct = call_llm(image_bytes, shared_client=shared_http)
+                    text, pt, ct = call_llm(image_bytes)
                     with _tokens_lock:
                         _total_prompt_tokens += pt
                         _total_completion_tokens += ct
@@ -484,24 +450,11 @@ def _process_pages_inner(
 
         consecutive_errors = 0
 
-        # Prefetch: preparar la imagen de la primera página por adelantado
-        next_image_future: Future[bytes] | None = None
-        if start_page < total_pages:
-            next_image_future = prefetch_pool.submit(get_image_bytes, start_page)
-
         for page_number in range(start_page, total_pages):
             if stop_requested.is_set():
                 break
 
-            # Obtener la imagen pre-cargada (o esperar si aún no terminó)
-            image_bytes = next_image_future.result() if next_image_future else get_image_bytes(page_number)
-
-            # Lanzar prefetch de la página siguiente mientras el LLM procesa esta
-            next_page = page_number + 1
-            if next_page < total_pages and not stop_requested.is_set():
-                next_image_future = prefetch_pool.submit(get_image_bytes, next_page)
-            else:
-                next_image_future = None
+            image_bytes = get_image_bytes(page_number)
 
             t_start = time.monotonic()
             done_event = threading.Event()
@@ -517,7 +470,7 @@ def _process_pages_inner(
             timer_thread.start()
 
             try:
-                text, pt, ct = call_llm(image_bytes, shared_client=shared_http)
+                text, pt, ct = call_llm(image_bytes)
                 with _tokens_lock:
                     _total_prompt_tokens += pt
                     _total_completion_tokens += ct
