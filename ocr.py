@@ -1,3 +1,4 @@
+import argparse
 import base64
 import datetime
 import json
@@ -18,10 +19,12 @@ import fitz  # pymupdf
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env")
+# Cuando el programa está compilado con PyInstaller, __file__ apunta a un
+# directorio temporal interno del bundle; sys.executable apunta al binario real.
+_app_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+load_dotenv(_app_dir / ".env")
 
 MAX_LONG_SIDE = int(os.getenv("MAX_LONG_SIDE", "1288"))
-DATOS_DIR = Path(os.getenv("DATOS_DIR", "./datos"))
 LOGS_DIR = Path(os.getenv("LOGS_DIR", "./logs"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
@@ -629,6 +632,32 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
 
 
 def main() -> None:
+    # ── Parsear argumentos de línea de comandos ───────────────────────────────
+    parser = argparse.ArgumentParser(
+        description="LLM OCR — Extrae texto de PDFs e imágenes usando un LLM.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "directorio",
+        nargs="?",
+        default=None,
+        metavar="DIRECTORIO",
+        help="Directorio con los archivos a procesar (por defecto: directorio actual)",
+    )
+    args = parser.parse_args()
+
+    # Prioridad: argumento CLI > variable de entorno DATOS_DIR > directorio actual
+    if args.directorio is not None:
+        datos_dir = Path(args.directorio).resolve()
+    elif os.getenv("DATOS_DIR"):
+        datos_dir = Path(os.environ["DATOS_DIR"]).resolve()
+    else:
+        datos_dir = Path.cwd()
+
+    if not datos_dir.is_dir():
+        print(f"Error: el directorio '{datos_dir}' no existe.")
+        sys.exit(1)
+
     # ── Configurar log tee: toda la salida va a consola y al fichero de log ──
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     log_name = f"llm-ocr-{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
@@ -641,7 +670,7 @@ def main() -> None:
     sys.stderr = tee_out  # type: ignore[assignment]
 
     try:
-        _main_inner()
+        _main_inner(datos_dir)
     finally:
         sys.stdout = _original_stdout
         sys.stderr = _original_stderr
@@ -649,19 +678,19 @@ def main() -> None:
         print(f"Log guardado en: {log_path}")
 
 
-def _main_inner() -> None:
+def _main_inner(datos_dir: Path) -> None:
     """Lógica principal del programa (ejecutada bajo el tee de log)."""
     _print_banner()
-    pdf_files = sorted(DATOS_DIR.glob("*.pdf"))
+    pdf_files = sorted(datos_dir.glob("*.pdf"))
     image_dirs = sorted(
-        d for d in DATOS_DIR.iterdir()
+        d for d in datos_dir.iterdir()
         if d.is_dir() and any(
             f.suffix.lower() in {".png", ".jpg", ".jpeg"} for f in d.iterdir() if f.is_file()
         )
     )
 
     if not pdf_files and not image_dirs:
-        print(f"No se encontraron archivos PDF ni directorios con imágenes en '{DATOS_DIR}'.")
+        print(f"No se encontraron archivos PDF ni directorios con imágenes en '{datos_dir}'.")
         return
 
     total = len(pdf_files) + len(image_dirs)
@@ -675,12 +704,12 @@ def _main_inner() -> None:
     for pdf_path in pdf_files:
         if stop_requested.is_set():
             break
-        convert_pdf_to_images(pdf_path, DATOS_DIR)
+        convert_pdf_to_images(pdf_path, datos_dir)
 
     for dir_path in image_dirs:
         if stop_requested.is_set():
             break
-        process_image_dir(dir_path, DATOS_DIR)
+        process_image_dir(dir_path, datos_dir)
 
     # Restaurar el terminal si el listener sigue vivo (salida normal)
     if not stop_requested.is_set():
