@@ -78,3 +78,9 @@ Temporary Items
 
 datos/
 logs/
+
+build/
+
+dist/
+
+llm-ocr.spec
