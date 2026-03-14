@@ -14,9 +14,10 @@ import unicodedata
 from collections.abc import Callable
 from io import TextIOWrapper
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import fitz  # pymupdf
-import httpx
+if TYPE_CHECKING:
+    import httpx
 from dotenv import load_dotenv
 
 # Cuando el programa está compilado con PyInstaller, __file__ apunta a un
@@ -32,6 +33,29 @@ STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "300"))
 MAX_CONSECUTIVE_ERRORS = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 DEBUG = os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes"}
+
+
+# ── Lazy-imports: se cargan la primera vez que se usan, no al arrancar ────────
+def _fitz():
+    """Devuelve el módulo fitz (PyMuPDF), importándolo la primera vez."""
+    if _fitz._mod is None:
+        import fitz as _mod  # type: ignore[import]
+        _fitz._mod = _mod
+    return _fitz._mod
+
+
+_fitz._mod = None  # type: ignore[attr-defined]
+
+
+def _httpx():
+    """Devuelve el módulo httpx, importándolo la primera vez."""
+    if _httpx._mod is None:
+        import httpx as _mod  # type: ignore[import]
+        _httpx._mod = _mod
+    return _httpx._mod
+
+
+_httpx._mod = None  # type: ignore[attr-defined]
 
 
 class _TeeWriter:
@@ -99,7 +123,7 @@ _total_completion_tokens: int = 0
 _tokens_lock = threading.Lock()
 
 # Estado de la petición LLM en curso (accedido desde el listener de teclado y call_llm)
-_current_http_client: httpx.Client | None = None
+_current_http_client: "httpx.Client | None" = None
 _current_generation_id: str | None = None
 _current_lock = threading.Lock()
 
@@ -117,17 +141,17 @@ def _cancel_current_request() -> None:
     if client is not None:
         try:
             client.close()
-        except httpx.HTTPError:
+        except Exception:
             pass
 
     if generation_id is not None:
         try:
-            httpx.post(
+            _httpx().post(
                 f"{LLM_BASE_URL}/chat/completions/{generation_id}/cancel",
                 headers={"Authorization": "Bearer lm-studio"},
                 timeout=5,
             )
-        except httpx.HTTPError:
+        except Exception:
             pass
 
 
@@ -217,7 +241,7 @@ def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
     result: dict = {"text": None, "error": None, "generation_id": None,
                     "prompt_tokens": 0, "completion_tokens": 0}
     # Cliente httpx compartido: cerrarlo desde el hilo principal interrumpe el socket
-    http_client = httpx.Client(timeout=None)
+    http_client = _httpx().Client(timeout=None)
 
     global _current_http_client, _current_generation_id
     with _current_lock:
@@ -283,7 +307,7 @@ def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
                 result["generation_id"] = None
 
             result["text"] = "".join(chunks)
-        except (httpx.HTTPError, OSError) as exc:
+        except (_httpx().HTTPError, OSError) as exc:
             result["error"] = exc
 
     thread = threading.Thread(target=_do_request, daemon=True)
@@ -447,7 +471,7 @@ def _process_pages(
                     done_event.set()
                     timer_thread.join()
                     break
-                except (TimeoutError, httpx.HTTPError, OSError) as e:
+                except (TimeoutError, OSError, Exception) as e:
                     elapsed = time.monotonic() - t_start
                     done_event.set()
                     timer_thread.join()
@@ -511,7 +535,7 @@ def _process_pages(
                 done_event.set()
                 timer_thread.join()
                 break
-            except (TimeoutError, httpx.HTTPError, OSError) as e:
+            except (TimeoutError, OSError, Exception) as e:
                 elapsed = time.monotonic() - t_start
                 done_event.set()
                 timer_thread.join()
@@ -555,7 +579,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
     slug = slugify(pdf_path.stem)
     markdown_path = output_base / f"{slug}.md"
 
-    doc = fitz.open(str(pdf_path))
+    doc = _fitz().open(str(pdf_path))
     total_pages = len(doc)
 
     if markdown_path.exists():
@@ -578,7 +602,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
         page = doc[page_number]
         long_side = max(page.rect.width, page.rect.height)
         scale = MAX_LONG_SIDE / long_side
-        mat = fitz.Matrix(scale, scale)
+        mat = _fitz().Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         return pix.tobytes("png")
 
@@ -619,11 +643,11 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
     def get_image_bytes(page_number: int) -> bytes:
         img_path = image_files[page_number]
         # Reescalar con fitz para respetar MAX_LONG_SIDE igual que con los PDFs
-        doc = fitz.open(str(img_path))
+        doc = _fitz().open(str(img_path))
         page = doc[0]
         long_side = max(page.rect.width, page.rect.height)
         scale = MAX_LONG_SIDE / long_side
-        mat = fitz.Matrix(scale, scale)
+        mat = _fitz().Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         doc.close()
         return pix.tobytes("png")
