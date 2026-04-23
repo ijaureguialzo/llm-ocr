@@ -21,6 +21,7 @@ ocr.py
 ├── _process_pages(...)                  (bucle principal de procesado: llama al LLM y escribe Markdown)
 │   ├── Fase 1: recupera páginas hueco  (gaps de ejecuciones previas interrumpidas)
 │   └── Fase 2: procesa páginas nuevas (desde la última página ya procesada)
+├── _collect_items(root)                 (descubre PDFs e image_dirs recursivamente con rglob)
 ├── _keyboard_listener()                 (hilo daemon: Escape para detener, S para saltar página)
 └── main() / _main_inner()              (punto de entrada, descubre PDFs y directorios)
 ```
@@ -28,11 +29,12 @@ ocr.py
 ### Flujo de datos
 
 1. El usuario coloca PDFs o directorios con imágenes en `DATOS_DIR` (por defecto `./datos`).
-2. `main()` descubre los archivos y lanza `convert_pdf_to_images` o `process_image_dir` por cada uno.
-3. Cada página se renderiza a PNG en memoria (a través de PyMuPDF/fitz), escalada para que el lado largo no supere `MAX_LONG_SIDE` píxeles.
-4. La imagen PNG se codifica en base64 y se envía al LLM vía `POST /v1/chat/completions` con streaming SSE.
-5. El texto extraído se escribe en un fichero Markdown junto al fichero de entrada, con una sección `## Página N` por página.
-6. Si la ejecución se interrumpe, la próxima ejecución **reanuda** desde la última página procesada y **rellena** los huecos.
+2. `_collect_items()` recorre el árbol **recursivamente** con `rglob`: encuentra todos los PDFs en cualquier nivel y todos los directorios que contienen directamente imágenes PNG/JPEG.
+3. `main()` lanza `convert_pdf_to_images` o `process_image_dir` por cada elemento encontrado. El Markdown de salida se guarda **junto al fichero fuente** (en el mismo directorio que el PDF o el directorio de imágenes).
+4. Cada página se renderiza a PNG en memoria (a través de PyMuPDF/fitz), escalada para que el lado largo no supere `MAX_LONG_SIDE` píxeles.
+5. La imagen PNG se codifica en base64 y se envía al LLM vía `POST /v1/chat/completions` con streaming SSE.
+6. El texto extraído se escribe en un fichero Markdown junto al fichero de entrada, con una sección `## Página N` por página.
+7. Si la ejecución se interrumpe, la próxima ejecución **reanuda** desde la última página procesada y **rellena** los huecos.
 
 ### Concurrencia
 

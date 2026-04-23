@@ -702,16 +702,33 @@ def main() -> None:
         print(f"Log guardado en: {log_path}")
 
 
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+
+def _collect_items(root: Path) -> tuple[list[Path], list[Path]]:
+    """Recorre root de forma recursiva y devuelve (pdf_files, image_dirs) ordenados.
+
+    - pdf_files: todos los .pdf encontrados en cualquier nivel del árbol.
+    - image_dirs: directorios que contienen directamente al menos un PNG/JPEG/JPG
+      (se consideran "proyectos de imágenes" completos y no se procesan sus
+      subdirectorios como proyectos independientes).
+    """
+    pdf_files: list[Path] = sorted(root.rglob("*.pdf"))
+
+    image_dirs: list[Path] = []
+    for dirpath in sorted(root.rglob("*")):
+        if not dirpath.is_dir():
+            continue
+        if any(f.suffix.lower() in _IMAGE_EXTENSIONS for f in dirpath.iterdir() if f.is_file()):
+            image_dirs.append(dirpath)
+
+    return pdf_files, image_dirs
+
+
 def _main_inner(datos_dir: Path) -> None:
     """Lógica principal del programa (ejecutada bajo el tee de log)."""
     _print_banner()
-    pdf_files = sorted(datos_dir.glob("*.pdf"))
-    image_dirs = sorted(
-        d for d in datos_dir.iterdir()
-        if d.is_dir() and any(
-            f.suffix.lower() in {".png", ".jpg", ".jpeg"} for f in d.iterdir() if f.is_file()
-        )
-    )
+    pdf_files, image_dirs = _collect_items(datos_dir)
 
     if not pdf_files and not image_dirs:
         print(f"No se encontraron archivos PDF ni directorios con imágenes en '{datos_dir}'.")
@@ -728,12 +745,12 @@ def _main_inner(datos_dir: Path) -> None:
     for pdf_path in pdf_files:
         if stop_requested.is_set():
             break
-        convert_pdf_to_images(pdf_path, datos_dir)
+        convert_pdf_to_images(pdf_path, pdf_path.parent)
 
     for dir_path in image_dirs:
         if stop_requested.is_set():
             break
-        process_image_dir(dir_path, datos_dir)
+        process_image_dir(dir_path, dir_path.parent)
 
     # Restaurar el terminal si el listener sigue vivo (salida normal)
     if not stop_requested.is_set():
