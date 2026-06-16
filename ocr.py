@@ -270,6 +270,7 @@ def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
             {
                 "role": "user",
                 "content": [
+                    {"type": "text", "text": "Devuelve solo el contenido textual de la imagen. No añadas explicaciones, comentarios ni texto adicional."},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{image_data}"},
@@ -803,7 +804,7 @@ def main() -> None:
     _select_model()
 
     if not LLM_MODEL:
-        print("No se ha seleccionado ningún modelo. Pulsa Enter para ver los modelos disponibles.")
+        print("No se ha seleccionado ningún modelo.")
         sys.exit(0)
 
     # ── Parsear argumentos de línea de comandos ───────────────────────────────
