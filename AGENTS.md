@@ -31,7 +31,7 @@ ocr.py
 ### Flujo de datos
 
 1. Al iniciar, `_select_model()` consulta la API de LM Studio (`/api/v1/models`) y muestra una lista interactiva
-   de modelos LLM disponibles. El usuario puede elegir uno (0 = modelo cargado) o mantener el de `.env`.
+   de modelos LLM disponibles. El usuario puede elegir uno (0 = modelo cargado). Si no hay modelos o se pulsa Enter sin seleccionar, el programa **sale**.
 2. El usuario coloca PDFs o directorios con imágenes en `DATOS_DIR` (por defecto `./datos`).
 3. `_collect_items()` recorre el árbol **recursivamente** con `rglob`: encuentra todos los PDFs en cualquier nivel y todos los directorios que contienen directamente imágenes PNG/JPEG.
 4. `main()` lanza `convert_pdf_to_images` o `process_image_dir` por cada elemento encontrado. El Markdown de salida se guarda **junto al fichero fuente** (en el mismo directorio que el PDF o el directorio de imágenes).
@@ -76,7 +76,6 @@ Copia `env-example` a `.env` y ajusta los valores:
 
 ```
 LLM_BASE_URL=http://localhost:1234/v1   # URL base de la API compatible con OpenAI
-LLM_MODEL=allenai/olmocr-2-7b           # identificador del modelo en el servidor LLM
 DATOS_DIR=./datos                        # directorio con los archivos de entrada
 LOGS_DIR=./logs                          # directorio donde se guardan los logs
 MAX_LONG_SIDE=1288                       # píxeles del lado largo al escalar imágenes
@@ -86,7 +85,7 @@ MAX_TOKENS=4096                          # tokens máximos de salida por página
 DEBUG=false                              # activa el log de chunks SSE en crudo
 ```
 
-**Nota:** el `.env` debe situarse junto al binario (`sys.executable`) cuando se usa el ejecutable compilado, o junto a `ocr.py` en desarrollo.
+**Nota:** el `.env` debe situarse junto al binario (`sys.executable`) cuando se usa el ejecutable compilado, o junto a `ocr.py` en desarrollo. El modelo siempre se selecciona de forma interactiva al iniciar, no desde `.env`.
 
 ---
 
@@ -142,7 +141,7 @@ Al modificar la lógica de escritura del Markdown, asegurarse de que `get_last_p
 
 - El programa usa `termios`/`tty`/`select` (Unix only). **No es compatible con Windows** sin cambios.
 - El LLM debe estar corriendo y accesible en `LLM_BASE_URL` antes de ejecutar el programa.
-- `_select_model()` consulta la API de LM Studio al iniciar: si no está disponible, continúa silenciosamente con `LLM_MODEL` de `.env`.
+- `_select_model()` consulta la API de LM Studio al iniciar: si no hay modelos disponibles o el usuario pulsa Enter sin seleccionar, el programa **sale** sin procesar nada.
 - Si `finish_reason == "length"`, el programa **dobla automáticamente** `MAX_TOKENS` y reintenta la misma página.
 - La cancelación de una petición en curso se realiza cerrando el socket HTTP y enviando una petición `POST .../cancel` al servidor LLM (específico de LM Studio).
 - Los metadatos YAML (bloque `---`) que el modelo puede incluir al inicio de la respuesta se eliminan automáticamente antes de escribir el Markdown.

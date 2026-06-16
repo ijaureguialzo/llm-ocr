@@ -28,7 +28,7 @@ load_dotenv(_app_dir / ".env")
 MAX_LONG_SIDE = int(os.getenv("MAX_LONG_SIDE", "1288"))
 LOGS_DIR = Path(os.getenv("LOGS_DIR", "./logs"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
+LLM_MODEL: str = ""  # siempre se asigna en _select_model() antes de procesar
 STREAM_CHUNK_TIMEOUT = int(os.getenv("STREAM_CHUNK_TIMEOUT", "300"))
 MAX_CONSECUTIVE_ERRORS = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
@@ -38,8 +38,8 @@ DEBUG = os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes"}
 def _fetch_models() -> tuple[list[str], str | None]:
     """Consulta la API de LM Studio y devuelve (lista_modelos, modelo_cargado).
 
-    Si LM Studio no está disponible se devuelve (None, None) para que el programa
-    continúe con LLM_MODEL del .env sin molestar al usuario.
+    Si LM Studio no está disponible se devuelve ([], None) para que el programa
+    salga sin procesar nada.
     """
     # Chat completions usa /v1/... pero models usa /api/v1/... (LM Studio)
     try:
@@ -707,7 +707,7 @@ def _select_model() -> None:
     all_models, loaded_model = _fetch_models()
 
     if not all_models:
-        return  # LM Studio no disponible, usar LLM_MODEL de .env
+        sys.exit(1)  # LM Studio no disponible, salir sin procesar nada
 
     is_tty = sys.stdin.isatty()
 
@@ -715,6 +715,8 @@ def _select_model() -> None:
         # Modo no interactivo: seleccionar cargado o primero sin mostrar lista
         if loaded_model:
             LLM_MODEL = loaded_model
+        else:
+            sys.exit(1)  # no hay modelo cargado, salir sin procesar
         return
 
     # Modo interactivo: mostrar lista y pedir selección al usuario
@@ -771,11 +773,13 @@ def _select_model() -> None:
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-        # Enter vacío → usar modelo cargado o salir
+        # Enter vacío → usar modelo cargado o salir sin seleccionar
         if not choice.strip():
             if loaded_model:
                 LLM_MODEL = loaded_model
                 print(f"  Usando modelo: {LLM_MODEL}")
+            else:
+                sys.exit(1)  # no hay modelo cargado ni selección, salir
             return
 
         # Debe ser un número válido
