@@ -707,7 +707,7 @@ def _select_model() -> None:
     all_models, loaded_model = _fetch_models()
 
     if not all_models:
-        sys.exit(1)  # LM Studio no disponible, salir sin procesar nada
+        return  # LM Studio no disponible, main() comprobará si LLM_MODEL está vacío
 
     is_tty = sys.stdin.isatty()
 
@@ -715,9 +715,7 @@ def _select_model() -> None:
         # Modo no interactivo: seleccionar cargado o primero sin mostrar lista
         if loaded_model:
             LLM_MODEL = loaded_model
-        else:
-            sys.exit(1)  # no hay modelo cargado, salir sin procesar
-        return
+        return  # main() comprobará si LLM_MODEL está vacío
 
     # Modo interactivo: mostrar lista y pedir selección al usuario
     separador = "-" * 80
@@ -773,14 +771,12 @@ def _select_model() -> None:
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-        # Enter vacío → usar modelo cargado o salir sin seleccionar
+        # Enter vacío → usar modelo cargado o salir sin seleccionar (main() lo comprueba)
         if not choice.strip():
             if loaded_model:
                 LLM_MODEL = loaded_model
                 print(f"  Usando modelo: {LLM_MODEL}")
-            else:
-                sys.exit(1)  # no hay modelo cargado ni selección, salir
-            return
+            return  # main() comprobará si LLM_MODEL está vacío
 
         # Debe ser un número válido
         try:
@@ -805,6 +801,10 @@ def _select_model() -> None:
 def main() -> None:
     # ── Selección de modelo desde LM Studio ───────────────────────────────────
     _select_model()
+
+    if not LLM_MODEL:
+        print("No se ha seleccionado ningún modelo. Pulsa Enter para ver los modelos disponibles.")
+        sys.exit(0)
 
     # ── Parsear argumentos de línea de comandos ───────────────────────────────
     parser = argparse.ArgumentParser(
