@@ -649,15 +649,15 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
             return
         start_page = last_page
         file_mode = "a"
+        print(f"Modelo:     {LLM_MODEL}\n")
         print(f"Reanudando: {output_base}/{pdf_path.name}")
         print(f"Markdown:   {markdown_path}")
-        print(f"Modelo:     {LLM_MODEL}\n")
     else:
         start_page = 0
         file_mode = "w"
+        print(f"Modelo:     {LLM_MODEL}")
         print(f"Procesando: {output_base}/{pdf_path.name}")
         print(f"Markdown:   {markdown_path}\n")
-        print(f"Modelo:     {LLM_MODEL}")
 
     def get_image_bytes(page_number: int) -> bytes:
         page = doc[page_number]
@@ -693,15 +693,15 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
             return
         start_page = last_page
         file_mode = "a"
+        print(f"Modelo:     {LLM_MODEL}\n")
         print(f"Reanudando: {output_base}/{dir_path.name}/")
         print(f"Markdown:   {markdown_path}")
-        print(f"Modelo:     {LLM_MODEL}\n")
     else:
         start_page = 0
         file_mode = "w"
+        print(f"Modelo:     {LLM_MODEL}")
         print(f"Procesando: {output_base}/{dir_path.name}/")
         print(f"Markdown:   {markdown_path}\n")
-        print(f"Modelo:     {LLM_MODEL}")
 
     def get_image_bytes(page_number: int) -> bytes:
         img_path = image_files[page_number]
