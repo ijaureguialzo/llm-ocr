@@ -14,6 +14,8 @@ Toda la lógica reside en un único fichero: **`ocr.py`**.
 ocr.py
 ├── Configuración vía .env               (variables de entorno con python-dotenv)
 ├── Lazy-imports                         (_fitz, _httpx: se cargan al primer uso)
+├── _fetch_models()                      (consulta API de LM Studio: /api/v1/models)
+├── _select_model()                      (selector interactivo de modelo al iniciar)
 ├── _TeeWriter                           (duplica stdout/stderr a consola y fichero de log)
 ├── call_llm(image_bytes)                (envía imagen al LLM en streaming SSE, devuelve texto)
 ├── convert_pdf_to_images(pdf, out)      (convierte cada página de un PDF a PNG y llama al LLM)
@@ -23,18 +25,20 @@ ocr.py
 │   └── Fase 2: procesa páginas nuevas (desde la última página ya procesada)
 ├── _collect_items(root)                 (descubre PDFs e image_dirs recursivamente con rglob)
 ├── _keyboard_listener()                 (hilo daemon: Escape para detener, S para saltar página)
-└── main() / _main_inner()              (punto de entrada, descubre PDFs y directorios)
+└── main() / _main_inner()              (punto de entrada: modelo → descubre PDFs y directorios)
 ```
 
 ### Flujo de datos
 
-1. El usuario coloca PDFs o directorios con imágenes en `DATOS_DIR` (por defecto `./datos`).
-2. `_collect_items()` recorre el árbol **recursivamente** con `rglob`: encuentra todos los PDFs en cualquier nivel y todos los directorios que contienen directamente imágenes PNG/JPEG.
-3. `main()` lanza `convert_pdf_to_images` o `process_image_dir` por cada elemento encontrado. El Markdown de salida se guarda **junto al fichero fuente** (en el mismo directorio que el PDF o el directorio de imágenes).
-4. Cada página se renderiza a PNG en memoria (a través de PyMuPDF/fitz), escalada para que el lado largo no supere `MAX_LONG_SIDE` píxeles.
-5. La imagen PNG se codifica en base64 y se envía al LLM vía `POST /v1/chat/completions` con streaming SSE.
-6. El texto extraído se escribe en un fichero Markdown junto al fichero de entrada, con una sección `## Página N` por página.
-7. Si la ejecución se interrumpe, la próxima ejecución **reanuda** desde la última página procesada y **rellena** los huecos.
+1. Al iniciar, `_select_model()` consulta la API de LM Studio (`/api/v1/models`) y muestra una lista interactiva
+   de modelos LLM disponibles. El usuario puede elegir uno (0 = modelo cargado) o mantener el de `.env`.
+2. El usuario coloca PDFs o directorios con imágenes en `DATOS_DIR` (por defecto `./datos`).
+3. `_collect_items()` recorre el árbol **recursivamente** con `rglob`: encuentra todos los PDFs en cualquier nivel y todos los directorios que contienen directamente imágenes PNG/JPEG.
+4. `main()` lanza `convert_pdf_to_images` o `process_image_dir` por cada elemento encontrado. El Markdown de salida se guarda **junto al fichero fuente** (en el mismo directorio que el PDF o el directorio de imágenes).
+5. Cada página se renderiza a PNG en memoria (a través de PyMuPDF/fitz), escalada para que el lado largo no supere `MAX_LONG_SIDE` píxeles.
+6. La imagen PNG se codifica en base64 y se envía al LLM vía `POST /v1/chat/completions` con streaming SSE.
+7. El texto extraído se escribe en un fichero Markdown junto al fichero de entrada, con una sección `## Página N` por página.
+8. Si la ejecución se interrumpe, la próxima ejecución **reanuda** desde la última página procesada y **rellena** los huecos.
 
 ### Concurrencia
 
@@ -42,6 +46,7 @@ ocr.py
 - La petición HTTP al LLM se ejecuta en un **hilo interno** dentro de `call_llm` para poder aplicar un timeout.
 - `stop_requested` y `skip_page_requested` son `threading.Event` compartidos.
 - `_current_http_client` y `_current_generation_id` están protegidos por `_current_lock`.
+- El selector de modelo (`_select_model`) usa `termios.setcbreak` + `select` para lectura carácter a carácter (mismo patrón que `_keyboard_listener`).
 
 ---
 
@@ -137,6 +142,7 @@ Al modificar la lógica de escritura del Markdown, asegurarse de que `get_last_p
 
 - El programa usa `termios`/`tty`/`select` (Unix only). **No es compatible con Windows** sin cambios.
 - El LLM debe estar corriendo y accesible en `LLM_BASE_URL` antes de ejecutar el programa.
+- `_select_model()` consulta la API de LM Studio al iniciar: si no está disponible, continúa silenciosamente con `LLM_MODEL` de `.env`.
 - Si `finish_reason == "length"`, el programa **dobla automáticamente** `MAX_TOKENS` y reintenta la misma página.
 - La cancelación de una petición en curso se realiza cerrando el socket HTTP y enviando una petición `POST .../cancel` al servidor LLM (específico de LM Studio).
 - Los metadatos YAML (bloque `---`) que el modelo puede incluir al inicio de la respuesta se eliminan automáticamente antes de escribir el Markdown.

@@ -35,6 +35,47 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 DEBUG = os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes"}
 
 
+def _fetch_models() -> tuple[list[str], str | None]:
+    """Consulta la API de LM Studio y devuelve (lista_modelos, modelo_cargado).
+
+    Si LM Studio no está disponible se devuelve (None, None) para que el programa
+    continúe con LLM_MODEL del .env sin molestar al usuario.
+    """
+    # Chat completions usa /v1/... pero models usa /api/v1/... (LM Studio)
+    try:
+        base = LLM_BASE_URL.rsplit("/v1", 1)[0] + "/api/v1"
+        resp = _httpx().get(f"{base}/models", timeout=5)
+        resp.raise_for_status()
+    except Exception:
+        return [], None
+
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, KeyError):
+        return [], None
+
+    if isinstance(data, dict) and "error" in data:
+        return [], None
+
+    loaded_model: str | None = None
+    all_models: list[str] = []
+
+    models_list = data.get("models") or []
+    for m in models_list:
+        if m.get("type") != "llm":
+            continue
+        key = m.get("key")
+        if not key:
+            continue
+        all_models.append(key)
+        loaded_instances = m.get("loaded_instances")
+        if loaded_instances and len(loaded_instances) > 0:
+            loaded_model = key
+
+    all_models.sort()
+    return all_models, loaded_model
+
+
 # ── Lazy-imports: se cargan la primera vez que se usan, no al arrancar ────────
 def _fitz():
     """Devuelve el módulo fitz (PyMuPDF), importándolo la primera vez."""
@@ -655,7 +696,112 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
     _process_pages(dir_path.name, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
 
 
+def _select_model() -> None:
+    """Selector interactivo de modelo LM Studio (espejo de model-select.sh).
+
+    Si hay un modelo cargado se ofrece como opción 0. En modo no interactivo
+    (pipe/redirección) se selecciona automáticamente el cargado o primero.
+    """
+    global LLM_MODEL
+
+    all_models, loaded_model = _fetch_models()
+
+    if not all_models:
+        return  # LM Studio no disponible, usar LLM_MODEL de .env
+
+    is_tty = sys.stdin.isatty()
+
+    if not is_tty:
+        # Modo no interactivo: seleccionar cargado o primero sin mostrar lista
+        if loaded_model:
+            LLM_MODEL = loaded_model
+        return
+
+    # Modo interactivo: mostrar lista y pedir selección al usuario
+    separador = "-" * 80
+
+    if loaded_model:
+        remaining = [m for m in all_models if m != loaded_model]
+        total = len(all_models)
+
+        print(separador)
+        print(f"  0\tModelo cargado: {loaded_model}")
+        if remaining:
+            print(separador)
+            for i, m in enumerate(remaining, 1):
+                print(f"  {i}\t{m}")
+            total = len(all_models)
+        else:
+            total = 1
+    else:
+        print(separador)
+        print("\tNo hay ningún modelo cargado.")
+        print(separador)
+        for i, m in enumerate(all_models, 1):
+            print(f"  {i}\t{m}")
+        total = len(all_models)
+
+    print(separador)
+
+    while True:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            print("  Elige número: ", end="", flush=True)
+            choice = ""
+            while True:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+                if ready:
+                    ch = sys.stdin.read(1)
+                    if ch in ("\n", "\r"):  # Enter → confirmar
+                        print()  # salto de línea tras el prompt
+                        break
+                    if ch in ("q", "Q"):  # q para salir sin cambiar modelo
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                        return  # Mantener LLM_MODEL de .env
+                    if ch in ("\x7f", "\b"):  # retroceso: borrar último carácter
+                        if choice:
+                            choice = choice[:-1]
+                            sys.stdout.write("\b \b")  # sobrescribir carácter en pantalla
+                        continue
+                    choice += ch
+                    sys.stdout.write(ch)  # eco manual (setcbreak no hace eco)
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        # Enter vacío → usar modelo cargado o salir
+        if not choice.strip():
+            if loaded_model:
+                LLM_MODEL = loaded_model
+                print(f"  Usando modelo: {LLM_MODEL}")
+            return
+
+        # Debe ser un número válido
+        try:
+            num = int(choice.strip())
+        except ValueError:
+            continue
+
+        if num < 0 or num > total:
+            continue
+
+        # Opción 0 = modelo cargado
+        if num == 0:
+            LLM_MODEL = loaded_model
+        else:
+            remaining = [m for m in all_models if m != loaded_model]
+            LLM_MODEL = remaining[num - 1]
+
+        print(f"  Usando modelo: {LLM_MODEL}")
+        return
+
+
 def main() -> None:
+    # ── Selección de modelo desde LM Studio ───────────────────────────────────
+    _select_model()
+
     # ── Parsear argumentos de línea de comandos ───────────────────────────────
     parser = argparse.ArgumentParser(
         description="LLM OCR — Extrae texto de PDFs e imágenes usando un LLM.",
