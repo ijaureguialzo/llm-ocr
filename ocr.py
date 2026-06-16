@@ -270,7 +270,24 @@ def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Devuelve solo el contenido textual de la imagen. No añadas explicaciones, comentarios ni texto adicional."},
+                    {
+                        "type": "text",
+                        "text": """
+                            Eres un motor de extracción y formateo de documentos. Analiza la imagen proporcionada (un documento escrito con párrafos, tablas, imágenes y diagramas) y devuelve ÚNICAMENTE el contenido en formato Markdown válido, respetando estrictamente la estructura visual y jerárquica original de la página.
+
+                            🔹 Reglas de procesamiento:
+                            1. **Estructura y párrafos:** Preserva el orden original, los títulos/subtítulos del cuerpo y las listas. Separa cada bloque de texto con un salto de línea doble (`\n\n`). **Ignora por completo los encabezados y pies de página**, así como cualquier numeración de página que aparezca en el documento.
+                            2. **Tablas:** Detecta todas las tablas, extrae sus encabezados y filas, y represéntalas como tablas Markdown estándar (`| Cabecera 1 | Cabecera 2 | ... |`). Si una tabla está cortada, borrosa o ilegible, escribe `[Tabla parcial/ilegible]`.
+                            3. **Tablas de contenido:** Si detectas una tabla de contenidos (generalmente al inicio del documento), represéntala como una lista Markdown jerárquica (`-` u `1.`). Preserva la indentación para subsecciones. **Omite por completo los números de página** y deja únicamente los títulos/subtítulos. Si no es claramente una lista o está muy fragmentada, marca `[Tabla de contenidos: descripción]`.
+                            4. **Imágenes y diagramas:**
+                               - Para fotos o ilustraciones: insértalas como `[Imagen: descripción objetiva y concisa del contenido]`.
+                               - Para diagramas, flujogramas o gráficos: genera una representación en ASCII lo más fiel posible. Si no es viable, usa `[Diagrama: descripción breve]`.
+                            5. **Formato estricto:** Devuelve SOLO texto Markdown válido. No incluyas conversaciones, explicaciones, metadatos, notas al margen ni código fuera del contenido extraído. Si un elemento no se puede interpretar, omítelo o marca claramente `[No reconocido]`.
+                            6. **Idioma:** Conserva el idioma original del documento. Si es ambiguo, traduce al español de forma natural.
+
+                            Procede con la conversión ahora.
+                        """
+                    },
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{image_data}"},
