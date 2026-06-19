@@ -472,7 +472,7 @@ def _process_pages(
     start_page: int,
     file_mode: str,
     get_image_bytes: Callable[[int], bytes],
-) -> None:
+) -> float:
     """Bucle común de procesado de páginas: llama al LLM y escribe el Markdown.
 
     get_image_bytes(page_number) debe devolver los bytes PNG de la página indicada.
@@ -631,9 +631,10 @@ def _process_pages(
     if error_pages:
         print(f"  {len(error_pages)} página(s) no procesada(s) por error: {error_pages}")
     print()
+    return sum(page_times)
 
 
-def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
+def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> float:
     """Convierte cada página de un PDF en una imagen PNG en memoria y la envía al LLM."""
     slug = slugify(pdf_path.stem)
     markdown_path = output_base / f"{slug}.md"
@@ -646,7 +647,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
         if last_page >= total_pages and not get_missing_pages(markdown_path):
             print(f"Saltando (ya completo): {pdf_path.name}  →  {markdown_path}\n")
             doc.close()
-            return
+            return []
         start_page = last_page
         file_mode = "a"
         print(f"Modelo:     {LLM_MODEL}\n")
@@ -667,11 +668,12 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> None:
         pix = page.get_pixmap(matrix=mat, alpha=False)
         return pix.tobytes("png")
 
-    _process_pages(pdf_path.stem, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
+    elapsed = _process_pages(pdf_path.stem, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
     doc.close()
+    return elapsed
 
 
-def process_image_dir(dir_path: Path, output_base: Path) -> None:
+def process_image_dir(dir_path: Path, output_base: Path) -> float:
     """Procesa todas las imágenes PNG/JPEG de un subdirectorio como si fuera un proyecto."""
     slug = slugify(dir_path.name)
     markdown_path = output_base / f"{slug}.md"
@@ -690,7 +692,7 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
         last_page = get_last_processed_page(markdown_path)
         if last_page >= total_pages and not get_missing_pages(markdown_path):
             print(f"Saltando (ya completo): {dir_path.name}/  →  {markdown_path}\n")
-            return
+            return 0.0
         start_page = last_page
         file_mode = "a"
         print(f"Modelo:     {LLM_MODEL}\n")
@@ -715,7 +717,7 @@ def process_image_dir(dir_path: Path, output_base: Path) -> None:
         doc.close()
         return pix.tobytes("png")
 
-    _process_pages(dir_path.name, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
+    return _process_pages(dir_path.name, markdown_path, total_pages, start_page, file_mode, get_image_bytes)
 
 
 def _select_model() -> None:
@@ -914,15 +916,17 @@ def _main_inner(datos_dir: Path) -> None:
     listener = threading.Thread(target=_keyboard_listener, daemon=True)
     listener.start()
 
+    total_elapsed = 0.0
+
     for pdf_path in pdf_files:
         if stop_requested.is_set():
             break
-        convert_pdf_to_images(pdf_path, pdf_path.parent)
+        total_elapsed += convert_pdf_to_images(pdf_path, pdf_path.parent)
 
     for dir_path in image_dirs:
         if stop_requested.is_set():
             break
-        process_image_dir(dir_path, dir_path.parent)
+        total_elapsed += process_image_dir(dir_path, dir_path.parent)
 
     # Restaurar el terminal si el listener sigue vivo (salida normal)
     if not stop_requested.is_set():
@@ -940,7 +944,12 @@ def _main_inner(datos_dir: Path) -> None:
         print(f"  Tokens de entrada (prompt):  {pt:,}")
         print(f"  Tokens de salida (completion): {ct:,}")
         print(f"  Tokens totales:                {pt + ct:,}")
+
+    if total_elapsed > 0:
         print()
+        print(f"  Tiempo total de procesamiento: {_fmt(total_elapsed)}")
+
+    print()
 
 
 if __name__ == "__main__":
