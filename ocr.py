@@ -647,7 +647,7 @@ def convert_pdf_to_images(pdf_path: Path, output_base: Path) -> float:
         if last_page >= total_pages and not get_missing_pages(markdown_path):
             print(f"Saltando (ya completo): {pdf_path.name}  →  {markdown_path}\n")
             doc.close()
-            return []
+            return 0.0
         start_page = last_page
         file_mode = "a"
         print(f"Modelo:     {LLM_MODEL}\n")
@@ -684,7 +684,7 @@ def process_image_dir(dir_path: Path, output_base: Path) -> float:
     )
 
     if not image_files:
-        return
+        return 0.0
 
     total_pages = len(image_files)
 
