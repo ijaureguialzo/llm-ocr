@@ -281,9 +281,9 @@ def call_llm(image_bytes: bytes) -> tuple[str, int, int]:
                             3. **Tablas de contenido:** Si detectas una tabla de contenidos (generalmente al inicio del documento), represéntala como una lista Markdown jerárquica (`-` u `1.`). Preserva la indentación para subsecciones. **Omite por completo los números de página** y deja únicamente los títulos/subtítulos. Si no es claramente una lista o está muy fragmentada, marca `[Tabla de contenidos: descripción]`.
                             4. **Imágenes y diagramas:**
                                - Para fotos o ilustraciones: insértalas como `[Imagen: descripción objetiva y concisa del contenido]`.
-                               - Para diagramas, flujogramas o gráficos: genera una representación en ASCII lo más fiel posible. Si no es viable, usa `[Diagrama: descripción breve]`.
+                               - Para diagramas, flujogramas o gráficos: genera una representación en formato Mermaid lo más fiel posible. Si no es viable, genera una representación en ASCII o, si eso tampoco es viable, usa `[Diagrama: descripción breve]`.
                             5. **Formato estricto:** Devuelve SOLO texto Markdown válido. No incluyas conversaciones, explicaciones, metadatos, notas al margen ni código fuera del contenido extraído. Si un elemento no se puede interpretar, omítelo o marca claramente `[No reconocido]`.
-                            6. **Idioma:** Conserva el idioma original del documento. Si es ambiguo, traduce al español de forma natural.
+                            6. **Idioma:** Conserva el idioma original del documento. Si es ambiguo, traduce al castellano (español de España) de forma natural.
 
                             Procede con la conversión ahora.
                         """
